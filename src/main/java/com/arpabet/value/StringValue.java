@@ -14,14 +14,6 @@ import java.nio.ByteBuffer;
  */
 public abstract sealed class StringValue extends Value permits Utf8String, RawString {
 
-    /**
-     * What the text of a binary starts with, in {@link #toString()} and
-     * {@link #jsonify()}: {@code base64,}, followed by its bytes in base64
-     * without padding. It is the Go implementation's {@code Base64Prefix};
-     * {@link #parse(String)} reads such text back.
-     */
-    public static final String BASE64_PREFIX = "base64,";
-
     StringValue() {
     }
 
@@ -51,8 +43,9 @@ public abstract sealed class StringValue extends Value permits Utf8String, RawSt
 
     /**
      * Reads a string as the typed getters do for a value that is not one:
-     * text that starts with {@code base64,} followed by unpadded base64 is
-     * the binary it prints as, and any other text is itself.
+     * text that starts with {@code base64,} (or what
+     * {@link Value#setBase64Prefix} set) followed by unpadded base64 is the
+     * binary it prints as, and any other text is itself.
      */
     public static StringValue parse(String s) {
         return Coerce.parseString(s);

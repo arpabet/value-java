@@ -377,9 +377,111 @@ public abstract sealed class Value
         return new Unpacker(in).limits(limits).readNext();
     }
 
-    // --- bytes written before v1.5.0 -----------------------------------------------
+    // --- the variables of the Go package ---------------------------------------------
+    //
+    // What the Go implementation keeps in package variables is kept here the
+    // same way: one setting for the whole process, read wherever it applies,
+    // on every thread. Set them when the program starts, as a Go program does,
+    // not while values are being read or printed elsewhere.
 
     private static volatile boolean legacyBigNumbers;
+    private static volatile String base64Prefix = "base64,";
+    private static volatile String unknownPrefix = "data:application/x-msgpack-ext;";
+    private static volatile char decimalExpDelim = 'x';
+    private static volatile double precisionLevel = 0.00001;
+    private static volatile int firstIndexKey = 0;
+
+    /**
+     * Sets what the text of a binary starts with, in {@link #toString()} and
+     * {@link #jsonify()}: {@code base64,} unless it is set, followed by the
+     * bytes in base64 without padding. {@link StringValue#parse(String)} and
+     * the typed getters read text that starts with it back as binary. It is
+     * the Go implementation's {@code Base64Prefix}.
+     *
+     * <p>It changes that text for the whole process and never the canonical
+     * bytes, except through a map read from foreign bytes whose key is not
+     * text: such a key becomes its text, here as in Go.
+     */
+    public static void setBase64Prefix(String prefix) {
+        if (prefix == null) {
+            throw new NullPointerException("prefix");
+        }
+        base64Prefix = prefix;
+    }
+
+    /** What the text of a binary starts with; see {@link #setBase64Prefix}. */
+    public static String base64Prefix() {
+        return base64Prefix;
+    }
+
+    /**
+     * Sets what the text of an {@linkplain ExtensionValue extension} starts
+     * with, in {@link #toString()} and {@link #jsonify()}:
+     * {@code data:application/x-msgpack-ext;} unless it is set. It is followed
+     * by {@link #base64Prefix()} and the type byte and the data in base64
+     * without padding. It is the Go implementation's {@code UnknownPrefix}.
+     */
+    public static void setUnknownPrefix(String prefix) {
+        if (prefix == null) {
+            throw new NullPointerException("prefix");
+        }
+        unknownPrefix = prefix;
+    }
+
+    /** What the text of an extension starts with; see {@link #setUnknownPrefix}. */
+    public static String unknownPrefix() {
+        return unknownPrefix;
+    }
+
+    /**
+     * Sets the character between the digits and the exponent in the text of a
+     * decimal, which {@link #toString()} writes in hexadecimal:
+     * {@code 0x01e2afx-03} is 123.567 with {@code x}, which it is unless it is
+     * set. {@link NumberValue#parse(String)} looks for the same character. It
+     * is the Go implementation's {@code DecimalExpDelim} and
+     * {@code DecimalExpDelimStr}, which are one character here.
+     *
+     * @throws IllegalArgumentException for a character that is not ASCII
+     */
+    public static void setDecimalExpDelim(char delimiter) {
+        if (delimiter >= 0x80) {
+            throw new IllegalArgumentException("delimiter is not ASCII: U+" + Integer.toHexString(delimiter));
+        }
+        decimalExpDelim = delimiter;
+    }
+
+    /** The character before the exponent in the text of a decimal; see {@link #setDecimalExpDelim}. */
+    public static char decimalExpDelim() {
+        return decimalExpDelim;
+    }
+
+    /**
+     * Sets how far apart two numbers may be and still be
+     * {@linkplain NumberValue#approxEquals close}: 0.00001 unless it is set.
+     * It is the Go implementation's {@code PrecisionLevel}.
+     */
+    public static void setPrecisionLevel(double level) {
+        precisionLevel = level;
+    }
+
+    /** How far apart two close numbers may be; see {@link #setPrecisionLevel}. */
+    public static double precisionLevel() {
+        return precisionLevel;
+    }
+
+    /**
+     * Sets the index {@link ListValue#append} gives the first value of an
+     * empty sparse list: 0 unless it is set. It is the Go implementation's
+     * {@code FirstIndexKey}.
+     */
+    public static void setFirstIndexKey(int index) {
+        firstIndexKey = index;
+    }
+
+    /** The index of the first value appended to an empty sparse list; see {@link #setFirstIndexKey}. */
+    public static int firstIndexKey() {
+        return firstIndexKey;
+    }
 
     /**
      * Makes every decoder read big integers and decimals in the layouts the Go

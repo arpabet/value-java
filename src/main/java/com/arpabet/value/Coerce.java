@@ -87,9 +87,10 @@ final class Coerce {
 
     /** Text that starts with {@code base64,} and is unpadded base64 after it is binary; any other is text. */
     static StringValue parseString(String s) {
-        if (s.startsWith(StringValue.BASE64_PREFIX)) {
+        final String prefix = Value.base64Prefix();
+        if (s.startsWith(prefix)) {
             try {
-                return new RawString(Base64.decodeRawStd(s.substring(StringValue.BASE64_PREFIX.length())));
+                return new RawString(Base64.decodeRawStd(s.substring(prefix.length())));
             } catch (ValueException e) {
                 // not base64: it is the text it looks like
             }
@@ -172,7 +173,7 @@ final class Coerce {
             s = s.substring(2);
         }
         int exp = 0;
-        final int at = s.indexOf('x');
+        final int at = s.indexOf(Value.decimalExpDelim());
         if (at != -1) {
             String e = s.substring(at + 1);
             boolean negativeExp = false;

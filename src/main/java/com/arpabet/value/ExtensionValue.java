@@ -22,13 +22,6 @@ public final class ExtensionValue extends Value {
     static final int DECIMAL = 2;
     static final int TIMESTAMP = -1;
 
-    /**
-     * What the text of an extension starts with, in {@link #toString()} and
-     * {@link #jsonify()}: it is followed by {@link StringValue#BASE64_PREFIX}
-     * and the type byte and the data in base64 without padding. It is the Go
-     * implementation's {@code UnknownPrefix}.
-     */
-    public static final String UNKNOWN_PREFIX = "data:application/x-msgpack-ext;";
 
     private final int type;
     private final byte[] data;
@@ -79,7 +72,7 @@ public final class ExtensionValue extends Value {
         final byte[] all = new byte[1 + data.length];
         all[0] = (byte) type;
         System.arraycopy(data, 0, all, 1, data.length);
-        return UNKNOWN_PREFIX + StringValue.BASE64_PREFIX + Base64.encodeRawStd(all);
+        return Value.unknownPrefix() + Value.base64Prefix() + Base64.encodeRawStd(all);
     }
 
     @Override

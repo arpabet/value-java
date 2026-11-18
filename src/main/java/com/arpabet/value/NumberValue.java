@@ -243,15 +243,15 @@ public abstract sealed class NumberValue extends Value
 
     /**
      * Reports whether two numbers are close: their doubles differ by less than
-     * 0.00001. It compares across types, is not consistent with the encoding
-     * and is not transitive, so it is no basis for hashing; NaN is close to
-     * nothing.
+     * 0.00001, or what {@link Value#setPrecisionLevel} set. It compares across
+     * types, is not consistent with the encoding and is not transitive, so it
+     * is no basis for hashing; NaN is close to nothing.
      */
     public final boolean approxEquals(NumberValue other) {
         if (other == null || isNaN() || other.isNaN()) {
             return false;
         }
-        return Math.abs(doubleValue() - other.doubleValue()) < 0.00001;
+        return Math.abs(doubleValue() - other.doubleValue()) < Value.precisionLevel();
     }
 
     // --- the hexadecimal text of big numbers ----------------------------------
@@ -272,7 +272,7 @@ public abstract sealed class NumberValue extends Value
         b.append(c.signum() >= 0 ? "0x" : "-0x");
         appendMagnitude(b, c);
         if (exp != 0) {
-            b.append('x');
+            b.append(Value.decimalExpDelim());
             long e = exp;
             if (e < 0) {
                 b.append('-');

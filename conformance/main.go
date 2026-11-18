@@ -60,6 +60,7 @@ func main() {
 	// as they are when these change.
 	write(*out, "seal.tsv", sealFile(*seed, n))
 	write(*out, "legacy.tsv", legacyFile(*seed, n))
+	write(*out, "settings.tsv", settingsFile(*seed, n))
 }
 
 func write(dir, name string, lines []string) {

@@ -74,7 +74,7 @@ final class SparseList extends ListValue {
 
     SparseList appended(Value held) {
         final int n = keys.length;
-        return splice(n, 0, n == 0 ? 0 : keys[n - 1] + 1, new Value[] {held});
+        return splice(n, 0, n == 0 ? Value.firstIndexKey() : keys[n - 1] + 1, new Value[] {held});
     }
 
     SparseList put(int index, Value held) {

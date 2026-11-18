@@ -365,14 +365,4 @@ class ValueTest {
         assertEquals("base64,AQID", raw.toString());
         assertEquals("\"base64,AQID\"", raw.jsonify());
     }
-
-    /** The texts the Go implementation keeps in Base64Prefix and UnknownPrefix. */
-    @Test
-    void thePrefixesOfBinaryAndExtensionText() {
-        assertEquals("base64,", StringValue.BASE64_PREFIX);
-        assertEquals("data:application/x-msgpack-ext;", ExtensionValue.UNKNOWN_PREFIX);
-        assertEquals(StringValue.BASE64_PREFIX + "AQI", Value.raw(new byte[] {1, 2}).toString());
-        assertEquals(Value.raw(new byte[] {1, 2}), StringValue.parse(StringValue.BASE64_PREFIX + "AQI"));
-        assertEquals(ExtensionValue.UNKNOWN_PREFIX + StringValue.BASE64_PREFIX + "BwEC", Value.ext(7, new byte[] {1, 2}).toString());
-    }
 }

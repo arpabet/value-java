@@ -380,6 +380,34 @@ Value.setLegacyBigNumbers(false);
 `Value.unpackLegacyBigInt` and `Value.unpackLegacyDecimal` read one such
 payload whatever the switch says, as Go's functions of those names do.
 
+## Settings of the process
+
+What the Go implementation keeps in package variables is kept here the same
+way: one setting for the whole process, on every thread. Set them when the
+program starts.
+
+| Go variable | Java | Unless set |
+|---|---|---|
+| `LegacyBigNumbers` | `Value.setLegacyBigNumbers(boolean)` | `false` |
+| `Base64Prefix` | `Value.setBase64Prefix(String)` | `base64,` |
+| `UnknownPrefix` | `Value.setUnknownPrefix(String)` | `data:application/x-msgpack-ext;` |
+| `DecimalExpDelim`, `DecimalExpDelimStr` | `Value.setDecimalExpDelim(char)` | `x` |
+| `PrecisionLevel` | `Value.setPrecisionLevel(double)` | `0.00001` |
+| `FirstIndexKey` | `Value.setFirstIndexKey(int)` | `0` |
+| `MaxParseDepth`, `MaxParseCollectionLen`, `MaxParseByteLen`, `MaxDecimalExponent` | a `Limits` passed to the call | Go's values |
+| `AllowFastAppends` | none: nothing here shares storage | |
+
+Each is read back by the method of the same name without `set`, such as
+`Value.base64Prefix()`.
+
+The two prefixes and the delimiter shape the text of `toString()` and
+`jsonify()`, which `StringValue.parse` and `NumberValue.parse` read back: a
+binary prints as `base64,AQI`, an extension as
+`data:application/x-msgpack-ext;base64,BwEC`, the decimal 123.567 as
+`0x01e2afx-03`. They never change the canonical bytes or the lossless JSON,
+with one exception that Go has too: a map read from foreign bytes whose key
+is not text gets the text of that key as its key.
+
 ## Android
 
 * minSdk 24; no desugaring needed. `JavaTime` (`java.time.Instant` and
@@ -403,7 +431,7 @@ What is checked, by `./gradlew build`:
 * **The conformance vectors** of the format (`testdata/canonical.json` of the
   Go repository, copied unchanged): bytes, decoding, text and canonical JSON.
 * **A golden corpus written by the Go implementation** (`conformance/`, about
-  11,600 cases in `src/test/resources/golden`): for canonical, non-canonical,
+  13,000 cases in `src/test/resources/golden`): for canonical, non-canonical,
   mutated and random bytes, what Go decodes, re-encodes and renders (both JSON
   modes, `String()`, `Jsonify`); JSON texts and what they parse to; the
   shortest text of doubles and floats; timestamps both ways; every number
@@ -419,12 +447,15 @@ What is checked, by `./gradlew build`:
   and foreign bytes is what `unseal` says. The field arithmetic is also
   checked against `BigInteger`, and X25519 against the JDK's.
 * **The layouts of before v1.5.0**, against Go with `LegacyBigNumbers` set.
+* **The other package variables**, against Go with them changed: the text of
+  values, what is read back from it, a key that is not text, `ApproxEqual`,
+  and the first index of a sparse list.
 
 A larger corpus takes seconds to write and check (it needs Go 1.25+):
 
 ```sh
 cd conformance && go run . -out /tmp/golden -scale 80 -seed 7 && cd ..
-./gradlew test -PgoldenDir=/tmp/golden      # about 640,000 cases
+./gradlew test -PgoldenDir=/tmp/golden      # about 680,000 cases
 ```
 
 Where the two differ, on purpose:
@@ -459,10 +490,8 @@ Where the two differ, on purpose:
 * **A codec for another dialect** is told which annotation names a field
   instead of reading a `json` or `msgpack` tag.
 * **The decoding limits** are an object passed to a call (`Limits`), where Go
-  has the variables `MaxParseDepth` and the like.
-* **The variables that shape Go's text** are constants here, with the values
-  Go has by default: `Base64Prefix` is `StringValue.BASE64_PREFIX` and
-  `UnknownPrefix` is `ExtensionValue.UNKNOWN_PREFIX`.
+  has the variables `MaxParseDepth` and the like. The other package variables
+  of Go are [settings of the process](#settings-of-the-process) here too.
 
 ## Building
 

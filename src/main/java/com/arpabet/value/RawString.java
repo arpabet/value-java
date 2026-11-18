@@ -55,12 +55,12 @@ final class RawString extends StringValue {
 
     @Override
     void jsonify(StringBuilder out) {
-        out.append('"').append(BASE64_PREFIX).append(Base64.encodeRawStd(value)).append('"');
+        out.append('"').append(Value.base64Prefix()).append(Base64.encodeRawStd(value)).append('"');
     }
 
     @Override
     public String toString() {
-        return BASE64_PREFIX + Base64.encodeRawStd(value);
+        return Value.base64Prefix() + Base64.encodeRawStd(value);
     }
 
     @Override

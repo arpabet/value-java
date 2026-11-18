@@ -45,6 +45,11 @@ compatible with it.
   `Value.unpackLegacyDecimal`: reading big integers and decimals in the
   layouts the Go implementation wrote before its v1.5.0, for migrating stored
   bytes.
+- **The package variables of the Go implementation** as settings of the
+  process: `Value.setBase64Prefix`, `Value.setUnknownPrefix`,
+  `Value.setDecimalExpDelim`, `Value.setPrecisionLevel` and
+  `Value.setFirstIndexKey` (Go's `Base64Prefix`, `UnknownPrefix`,
+  `DecimalExpDelim`, `PrecisionLevel` and `FirstIndexKey`).
 - **`StructCodec`**: the numeric schema of `@Tag` and `@Repeated` (Go's
   `PackStruct` and `UnpackStruct`).
 - **Conformance**: the vectors of the format, a golden corpus written by the
