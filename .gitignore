@@ -1,0 +1,13 @@
+.gradle/
+build/
+out/
+.idea/
+*.iml
+.DS_Store
+*.class
+local.properties
+
+# conformance generator: local-dev workspace + compiled binary
+conformance/go.work
+conformance/go.work.sum
+conformance/conformance
