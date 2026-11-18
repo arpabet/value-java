@@ -115,4 +115,65 @@ class ReadmeTest {
         assertTrue(Value.unpack(deep) instanceof ListValue);
         assertThrows(ValueException.class, () -> Value.unpack(deep, tight));
     }
+
+    @Test
+    void sealing() {
+        final byte[] alicePrivate = Sealer.newPrivateKey();
+        final byte[] alicePublic = Sealer.publicKey(alicePrivate);
+        final byte[] bobPrivate = Sealer.newPrivateKey();
+        final byte[] bobPublic = Sealer.publicKey(bobPrivate);
+
+        final byte[] sealed = Value.utf8("secret message").seal(bobPublic, alicePrivate);
+        final Value opened = Value.unseal(sealed, alicePublic, bobPrivate);
+        assertEquals(Value.utf8("secret message"), opened);
+
+        final Value message = MapValue.builder().put("n", 1).build();
+        final Sealer toBob = Sealer.of(bobPublic, alicePrivate);
+        final byte[] sealedAgain = toBob.seal(message);
+        assertEquals(message, Sealer.of(alicePublic, bobPrivate).unseal(sealedAgain));
+        assertEquals(message.pack().length + 40, sealedAgain.length);
+
+        final Frame rpc = new Frame();
+        rpc.method = Value.utf8("ping");
+        final byte[] frame = toBob.sealBytes(StructCodec.pack(rpc));
+        assertEquals("ping", StructCodec.unpack(Sealer.of(alicePublic, bobPrivate).unsealBytes(frame), Frame.class).method.utf8());
+    }
+
+    static final class Frame {
+        @Tag(1) StringValue method;
+    }
+
+    @Test
+    void buildingInPlace() {
+        final ListValue rows = Value.mutableList();
+        for (int row = 0; row < 3; row++) {
+            rows.append(Value.ofLong(row));
+        }
+        assertEquals("[0,1,2]", rows.toString());
+
+        final String region = "eu";
+        final MapValue event = Value.mutableMap().put("op", Value.utf8("put"));
+        if (region != null) {
+            event.put("region", Value.utf8(region));
+        }
+        assertEquals(false, event.update("seq", old -> ((NumberValue) old).add(Value.ofLong(1))));
+        assertEquals("{\"op\": \"put\",\"region\": \"eu\"}", event.toString());
+
+        // What a collection holds is what was put, as it was then.
+        final MapValue outer = Value.emptyMap().put("rows", rows);
+        rows.append(Value.ofLong(3));
+        assertEquals("{\"rows\": [0,1,2]}", outer.toString());
+        assertEquals(Value.list(Value.ofLong(0), Value.ofLong(1), Value.ofLong(2), Value.ofLong(3)), rows.toImmutable());
+        assertEquals(Value.mapOf(java.util.Collections.singletonMap("a", Value.ofLong(1))),
+                Value.mapOf(java.util.Collections.singletonMap("a", Value.ofLong(1))).toMutable());
+    }
+
+    @Test
+    void bytesWrittenBeforeTheBigNumbersBecamePortable() {
+        final byte[] stored = Hex.decode("d501027b");      // 123 as Go's gob encoding
+        final Limits old = Limits.DEFAULT.withLegacyBigNumbers(true);
+        final byte[] migrated = Value.unpack(stored, old).pack();
+        assertEquals("d4017b", Hex.encode(migrated));
+        assertEquals(Value.ofBigInt(BigInteger.valueOf(123)), Value.unpack(migrated));
+    }
 }

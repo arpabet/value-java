@@ -14,7 +14,18 @@ compatible with it.
 
 - **The value model**: `Value` and its kinds (`NullValue`, `BoolValue`,
   `NumberValue`, `StringValue`, `TimestampValue`, `ListValue`, `MapValue`,
-  `ExtensionValue`), all immutable, with equality by canonical bytes.
+  `ExtensionValue`), immutable, with equality by canonical bytes.
+- **Lists and maps that change in place** (Go's mutable collections):
+  `Value.mutableList`, `Value.mutableSparseList`, `Value.mutableMap`,
+  `toMutable`, `toImmutable`, `isMutable`, and `update` / `updateAt` (Go's
+  `Update`). The methods that return another collection change a mutable one
+  and return it. What a collection holds stays immutable, and nothing read
+  from bytes or text is mutable.
+- **Sealing**: `Value.seal`, `Value.unseal` and `Sealer` (Go's `Seal` and
+  `Unseal`): NaCl box, that is X25519, XSalsa20 and Poly1305, in pure Java
+  with no dependency, interoperable with the Go implementation in both
+  directions. `Sealer` makes keys, does the key agreement once per peer, and
+  seals bytes that are not a value in the same form.
 - **Canonical MessagePack**: `Value.pack`, `Value.unpack`, `Value.read`,
   `Value.writeTo`, `Unpacker`, and the decoding `Limits` of the Go
   implementation. The decoder reads every MessagePack form and does not
@@ -25,10 +36,16 @@ compatible with it.
 - **`ValueCodec`**: Java objects to and from values by `@Name`, `@OmitEmpty`,
   `@Sign` and `@Unsigned` (Go's `Marshal`, `Unmarshal`, `SignBytes` and
   `SignHash`), with lossless and missing-field modes, records, and converters
-  for other types.
+  for other types. `ValueCodec.named` names fields by the annotation of
+  another library, as Go's `JSONValueCodec` and `MsgpackValueCodec` do by
+  `json` and `msgpack` tags.
+- **`Limits.withLegacyBigNumbers`** (Go's `LegacyBigNumbers`): reading big
+  integers and decimals in the layouts the Go implementation wrote before its
+  v1.5.0, for migrating stored bytes.
 - **`StructCodec`**: the numeric schema of `@Tag` and `@Repeated` (Go's
   `PackStruct` and `UnpackStruct`).
 - **Conformance**: the vectors of the format, a golden corpus written by the
-  Go implementation, and the generator that writes it (`conformance/`).
+  Go implementation (sealing by `golang.org/x/crypto` included), and the
+  generator that writes it (`conformance/`).
 - Java 17 bytecode with no dependencies; Android API 24 and up, checked by the
   build, with R8 rules in the jar.

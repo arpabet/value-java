@@ -8,6 +8,7 @@ package com.arpabet.value;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
+import java.util.function.UnaryOperator;
 
 /**
  * A list, dense or sparse.
@@ -18,9 +19,29 @@ import java.util.List;
  * it may hold several values under one index, which is how a repeated field of
  * a numeric schema travels. The two never encode alike and are never equal.
  *
- * <p>Lists are immutable: the methods that change a list return another one.
+ * <p>A list is immutable: the methods that change it return another list,
+ * and the list is safe to share. Building one that way copies it at every
+ * step, so there is a <em>mutable</em> list as well ({@link Value#mutableList()},
+ * {@link Value#mutableSparseList()}, {@link #toMutable()}), on which the same
+ * methods change the list itself and return it:
+ *
+ * <pre>{@code
+ * ListValue rows = Value.mutableList();
+ * for (Row row : result) {
+ *     rows.append(encode(row));          // or rows = rows.append(...), as with any list
+ * }
+ * }</pre>
+ *
+ * <p>A mutable list is a value like any other: it packs, prints and compares
+ * by what it holds at the moment, and equals the immutable list of the same
+ * values. It is not safe to share between threads while it changes. What a
+ * list holds is always immutable: putting a mutable list or map into another
+ * list or map puts {@linkplain #toImmutable() what it is at that moment},
+ * and later changes to it do not show there. A list read from bytes or text
+ * is never mutable.
  */
-public abstract sealed class ListValue extends Value implements Iterable<Value> permits DenseList, SparseList {
+public abstract sealed class ListValue extends Value implements Iterable<Value>
+        permits DenseList, SparseList, MutableDenseList, MutableSparseList {
 
     ListValue() {
     }
@@ -77,6 +98,26 @@ public abstract sealed class ListValue extends Value implements Iterable<Value> 
     /** The values the list holds, each with its index, in the order they encode in. */
     public abstract List<Item> items();
 
+    /**
+     * The list itself when it is immutable; otherwise an immutable list of
+     * what this one holds now.
+     */
+    @Override
+    public abstract ListValue toImmutable();
+
+    /** A new mutable list of what this one holds, dense or sparse as it is. */
+    public abstract ListValue toMutable();
+
+    /**
+     * Replaces the first value at an index of a mutable list by what the
+     * function makes of it, in place; null from the function is the null
+     * value. It is the Go implementation's {@code UpdateAt}, and like it does
+     * nothing to an immutable list.
+     *
+     * @return whether a value was replaced: false for an immutable list, and where the list has no value
+     */
+    public abstract boolean updateAt(int index, UnaryOperator<Value> updater);
+
     /** A list with the value after the last one. */
     public abstract ListValue append(Value value);
 
@@ -121,16 +162,18 @@ public abstract sealed class ListValue extends Value implements Iterable<Value> 
         return jsonify();
     }
 
-    static Value orNull(Value v) {
-        return v == null ? NullValue.NULL : v;
+    /**
+     * A value as a list or a map holds it: the null value for null, and what
+     * a mutable list or map is at the moment, so that nothing held changes.
+     */
+    static Value element(Value v) {
+        return v == null ? NullValue.NULL : v.toImmutable();
     }
 
-    static Value[] orNull(Collection<? extends Value> values) {
+    static Value[] elements(Collection<? extends Value> values) {
         final Value[] out = values.toArray(new Value[0]);
         for (int i = 0; i < out.length; i++) {
-            if (out[i] == null) {
-                out[i] = NullValue.NULL;
-            }
+            out[i] = element(out[i]);
         }
         return out;
     }

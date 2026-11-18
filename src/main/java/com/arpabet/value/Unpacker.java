@@ -437,11 +437,17 @@ public final class Unpacker {
     static Value extension(int type, byte[] data, Limits limits) {
         switch (type) {
             case ExtensionValue.BIGINT:
+                if (limits.legacyBigNumbers()) {
+                    return new BigIntNumber(legacyBigInt(data, 0));
+                }
                 if (data.length == 0) {
                     throw new ValueException("empty big integer payload");
                 }
                 return new BigIntNumber(new BigInteger(data));
             case ExtensionValue.DECIMAL: {
+                if (limits.legacyBigNumbers()) {
+                    return new DecimalNumber(legacyDecimal(data, limits));
+                }
                 if (data.length < 5) {
                     throw new ValueException("decimal payload of " + data.length + " bytes, want at least 5");
                 }
@@ -454,6 +460,37 @@ public final class Unpacker {
             default:
                 return new ExtensionValue(type, data);
         }
+    }
+
+    /**
+     * A big integer as Go's math/big wrote it for gob, the payload before
+     * v1.5.0: a byte holding the version of the encoding, which is 1, above
+     * the sign, then the magnitude. No bytes at all is zero.
+     */
+    private static BigInteger legacyBigInt(byte[] data, int from) {
+        if (data.length == from) {
+            return BigInteger.ZERO;
+        }
+        final int head = data[from] & 0xFF;
+        if (head >> 1 != 1) {
+            throw new ValueException("legacy big integer payload: encoding version " + (head >> 1) + " not supported");
+        }
+        final BigInteger magnitude = new BigInteger(1, Arrays.copyOfRange(data, from + 1, data.length));
+        return (head & 1) != 0 ? magnitude.negate() : magnitude;
+    }
+
+    /** A decimal as it travelled before v1.5.0: a 4-byte exponent, then the coefficient as above. */
+    private static BigDecimal legacyDecimal(byte[] data, Limits limits) {
+        if (data.length < 4) {
+            throw new ValueException("legacy decimal payload of " + data.length + " bytes, want at least 4");
+        }
+        final int exponent = (data[0] << 24) | ((data[1] & 0xFF) << 16) | ((data[2] & 0xFF) << 8) | (data[3] & 0xFF);
+        final BigInteger coefficient = legacyBigInt(data, 4);
+        limits.checkDecimalExponent(exponent);
+        if (exponent == Integer.MIN_VALUE) {
+            throw new ValueException("decimal exponent " + exponent + " is out of range");
+        }
+        return new BigDecimal(coefficient, -exponent);
     }
 
     // --- lists and maps being read ------------------------------------------------

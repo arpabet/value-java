@@ -23,7 +23,11 @@ import java.util.Map;
  * <p>A value is null, a boolean, a number (long, double, big integer or
  * decimal), a string (text or binary), a timestamp, a list (dense or sparse),
  * a map with text keys, or an extension the format does not define. Values
- * form trees, are immutable and are safe to share between threads.
+ * form trees, are immutable and are safe to share between threads. The one
+ * exception is a list or a map asked for as mutable ({@link #mutableList()},
+ * {@link #mutableMap()}), which changes in place while it is being built;
+ * nothing read from bytes or text is ever one, and what any list or map holds
+ * is immutable.
  *
  * <p>{@link #pack()} gives the canonical MessagePack bytes of a value: the
  * same value always encodes to exactly the same bytes, so the bytes can be
@@ -178,10 +182,21 @@ public abstract sealed class Value
      * @param type the extension type, -128 to 127 (0 to 255 is accepted as the byte)
      */
     public static Value ext(int type, byte[] data) {
+        return ext(type, data, Limits.DEFAULT);
+    }
+
+    /**
+     * The value of a MessagePack extension as the decoder reads it within the
+     * limits, which also say {@linkplain Limits#withLegacyBigNumbers which
+     * layout} the data of a big integer or a decimal is in.
+     *
+     * @throws ValueException when the data is not that of the type, or exceeds a limit
+     */
+    public static Value ext(int type, byte[] data, Limits limits) {
         if (type < -128 || type > 255) {
             throw new IllegalArgumentException("extension type " + type);
         }
-        return Unpacker.extension((byte) type, data.clone(), Limits.DEFAULT);
+        return Unpacker.extension((byte) type, data.clone(), limits);
     }
 
     /** A dense list of the items; a null item is the null value. */
@@ -212,6 +227,29 @@ public abstract sealed class Value
         return MapValue.EMPTY;
     }
 
+    /**
+     * A new, empty dense list that changes in place: {@code append} and the
+     * like change the list itself and return it. It is the Go
+     * implementation's {@code EmptyMutableList}; see {@link ListValue}.
+     */
+    public static ListValue mutableList() {
+        return new MutableDenseList(DenseList.EMPTY);
+    }
+
+    /** A new, empty sparse list that changes in place. */
+    public static ListValue mutableSparseList() {
+        return new MutableSparseList(SparseList.EMPTY);
+    }
+
+    /**
+     * A new, empty map that changes in place: {@code put} and the like change
+     * the map itself and return it. It is the Go implementation's
+     * {@code EmptyMutableMap}; see {@link MapValue}.
+     */
+    public static MapValue mutableMap() {
+        return MapValue.EMPTY.toMutable();
+    }
+
     /** A map of the entries of a Java map; a null value is the null value. */
     public static MapValue mapOf(Map<String, ? extends Value> map) {
         final MapValue.Builder b = MapValue.builder();
@@ -229,6 +267,23 @@ public abstract sealed class Value
     /** Reports whether this is the null value. */
     public final boolean isNull() {
         return this == NullValue.NULL;
+    }
+
+    /**
+     * Reports whether this is a list or a map that changes in place. Any
+     * other value never changes and is safe to share between threads.
+     */
+    public boolean isMutable() {
+        return false;
+    }
+
+    /**
+     * The value itself, unless it is a mutable list or map: then an immutable
+     * one that holds what it holds now and is not affected by what happens to
+     * it later.
+     */
+    public Value toImmutable() {
+        return this;
     }
 
     /**
@@ -328,6 +383,40 @@ public abstract sealed class Value
     /** Reads the next value of a stream, within the limits. */
     public static Value read(InputStream in, Limits limits) throws IOException {
         return new Unpacker(in).limits(limits).readNext();
+    }
+
+    // --- sealing -------------------------------------------------------------
+
+    /**
+     * Seals the value for a recipient: its canonical bytes, encrypted so that
+     * only the holder of the recipient's private key reads them, and
+     * authenticated as coming from the holder of the sender's. It is the Go
+     * implementation's {@code Seal}; see {@link Sealer}, which also makes the
+     * keys, and which does the work the two keys share once when there are
+     * several messages to seal.
+     *
+     * @param recipientPublicKey the 32-byte public key of the reader
+     * @param senderPrivateKey the 32-byte private key of the writer
+     * @throws ValueException when a key is not 32 bytes or the public key is not one an honest peer has
+     */
+    public final byte[] seal(byte[] recipientPublicKey, byte[] senderPrivateKey) {
+        return Sealer.of(recipientPublicKey, senderPrivateKey).seal(this);
+    }
+
+    /**
+     * Opens bytes sealed for the holder of the recipient's private key by the
+     * holder of the sender's, and reads the value in them.
+     *
+     * @throws ValueException when the bytes were not sealed between these two
+     *         keys or were altered since, or what they hold is not a value
+     */
+    public static Value unseal(byte[] sealed, byte[] senderPublicKey, byte[] recipientPrivateKey) {
+        return Sealer.of(senderPublicKey, recipientPrivateKey).unseal(sealed);
+    }
+
+    /** Opens sealed bytes and reads the value in them, within the limits. */
+    public static Value unseal(byte[] sealed, byte[] senderPublicKey, byte[] recipientPrivateKey, Limits limits) {
+        return Sealer.of(senderPublicKey, recipientPrivateKey).unseal(sealed, limits);
     }
 
     // --- text ----------------------------------------------------------------

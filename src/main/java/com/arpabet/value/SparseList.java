@@ -11,6 +11,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.UnaryOperator;
 
 /** A list keyed by index: a MessagePack map with integer keys. */
 final class SparseList extends ListValue {
@@ -50,6 +51,32 @@ final class SparseList extends ListValue {
             return new SparseList(k, v);
         }
         return new SparseList(keys, vals);
+    }
+
+    @Override
+    public ListValue toImmutable() {
+        return this;
+    }
+
+    @Override
+    public ListValue toMutable() {
+        return new MutableSparseList(this);
+    }
+
+    @Override
+    public boolean updateAt(int index, UnaryOperator<Value> updater) {
+        return false;
+    }
+
+    /** The list with the first value at the index replaced by what the function makes of it, or null when it has none. */
+    SparseList updated(int index, UnaryOperator<Value> updater) {
+        final int i = lowerBound(index);
+        if (i == keys.length || keys[i] != index) {
+            return null;
+        }
+        final Value[] v = vals.clone();
+        v[i] = element(updater.apply(v[i]));
+        return new SparseList(keys, v);
     }
 
     /** The first position whose index is not below the key. */
@@ -129,19 +156,19 @@ final class SparseList extends ListValue {
     @Override
     public ListValue append(Value value) {
         final int n = keys.length;
-        return splice(n, 0, n == 0 ? 0 : keys[n - 1] + 1, new Value[] {orNull(value)});
+        return splice(n, 0, n == 0 ? 0 : keys[n - 1] + 1, new Value[] {element(value)});
     }
 
     @Override
     public ListValue putAt(int index, Value value) {
         final int i = lowerBound(index);
         final boolean found = i < keys.length && keys[i] == index;
-        return splice(i, found ? 1 : 0, index, new Value[] {orNull(value)});
+        return splice(i, found ? 1 : 0, index, new Value[] {element(value)});
     }
 
     @Override
     public ListValue insertAt(int index, Value value) {
-        return splice(lowerBound(index), 0, index, new Value[] {orNull(value)});
+        return splice(lowerBound(index), 0, index, new Value[] {element(value)});
     }
 
     @Override
@@ -173,7 +200,7 @@ final class SparseList extends ListValue {
         if (values.isEmpty()) {
             return this;
         }
-        return splice(lowerBound(index), 0, index, orNull(values));
+        return splice(lowerBound(index), 0, index, elements(values));
     }
 
     @Override
@@ -234,6 +261,9 @@ final class SparseList extends ListValue {
 
     @Override
     public boolean equals(Object o) {
+        if (o instanceof MutableSparseList) {
+            o = ((MutableSparseList) o).toImmutable();
+        }
         if (o == this) {
             return true;
         }

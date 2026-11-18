@@ -56,6 +56,10 @@ func main() {
 	write(*out, "parse.tsv", parseFile(n))
 	write(*out, "base64.tsv", base64File(n))
 	write(*out, "codec.tsv", codecFile())
+	// These two draw from sources of their own, so that the files above stay
+	// as they are when these change.
+	write(*out, "seal.tsv", sealFile(*seed, n))
+	write(*out, "legacy.tsv", legacyFile(*seed, n))
 }
 
 func write(dir, name string, lines []string) {
@@ -335,7 +339,11 @@ func randValue(depth int) val.Value {
 
 // --- a writer of the forms a canonical writer does not use ---------------------
 
-type sloppy struct{ b []byte }
+type sloppy struct {
+	b []byte
+	// legacy writes big integers and decimals in the layout of before v1.5.0.
+	legacy bool
+}
 
 func (w *sloppy) u(n int, v uint64) {
 	for i := n - 1; i >= 0; i-- {
@@ -447,7 +455,13 @@ func (w *sloppy) value(v val.Value) {
 		default:
 			packed, _ := val.Pack(v)
 			_, tag, data := splitExt(packed)
-			if n.Type() == val.BIGINT {
+			if w.legacy {
+				if n.Type() == val.BIGINT {
+					data = gob(n.BigInt())
+				} else {
+					data = legacyDecimal(n.Decimal())
+				}
+			} else if n.Type() == val.BIGINT {
 				data = signExtend(data)
 			} else {
 				data = append(append([]byte{}, data[:4]...), signExtend(data[4:])...)

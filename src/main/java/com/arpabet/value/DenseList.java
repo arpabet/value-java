@@ -10,6 +10,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.UnaryOperator;
 
 /** A list with a value at every index: a MessagePack array. */
 final class DenseList extends ListValue {
@@ -19,9 +20,29 @@ final class DenseList extends ListValue {
     private final Value[] items;
     private int hash;
 
-    /** Takes the array, which holds no null, without a copy. */
+    /** Takes the array, which holds no null and nothing mutable, without a copy. */
     DenseList(Value[] items) {
         this.items = items;
+    }
+
+    /** The values, for a mutable list to start from. The array is not to be changed. */
+    Value[] array() {
+        return items;
+    }
+
+    @Override
+    public ListValue toImmutable() {
+        return this;
+    }
+
+    @Override
+    public ListValue toMutable() {
+        return new MutableDenseList(this);
+    }
+
+    @Override
+    public boolean updateAt(int index, UnaryOperator<Value> updater) {
+        return false;
     }
 
     static DenseList copyOf(Value[] src) {
@@ -30,7 +51,7 @@ final class DenseList extends ListValue {
         }
         final Value[] items = new Value[src.length];
         for (int i = 0; i < src.length; i++) {
-            items[i] = orNull(src[i]);
+            items[i] = element(src[i]);
         }
         return new DenseList(items);
     }
@@ -78,7 +99,7 @@ final class DenseList extends ListValue {
     @Override
     public ListValue append(Value value) {
         final Value[] out = Arrays.copyOf(items, items.length + 1);
-        out[items.length] = orNull(value);
+        out[items.length] = element(value);
         return new DenseList(out);
     }
 
@@ -92,7 +113,7 @@ final class DenseList extends ListValue {
         for (int i = n; i < index; i++) {
             out[i] = NullValue.NULL;
         }
-        out[index] = orNull(value);
+        out[index] = element(value);
         return new DenseList(out);
     }
 
@@ -104,7 +125,7 @@ final class DenseList extends ListValue {
         if (index >= items.length) {
             return append(value);
         }
-        return splice(index, 0, new Value[] {orNull(value)});
+        return splice(index, 0, new Value[] {element(value)});
     }
 
     @Override
@@ -126,7 +147,7 @@ final class DenseList extends ListValue {
         if (values.isEmpty() || index < 0) {
             return this;
         }
-        return splice(Math.min(index, items.length), 0, orNull(values));
+        return splice(Math.min(index, items.length), 0, elements(values));
     }
 
     @Override
@@ -174,6 +195,9 @@ final class DenseList extends ListValue {
 
     @Override
     public boolean equals(Object o) {
+        if (o instanceof MutableDenseList) {
+            o = ((MutableDenseList) o).toImmutable();
+        }
         return o == this || (o instanceof DenseList && Arrays.equals(((DenseList) o).items, items));
     }
 

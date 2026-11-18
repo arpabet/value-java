@@ -14,6 +14,10 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.security.KeyPair;
@@ -401,5 +405,141 @@ class CodecTest {
         // A fraction is never a big integer, in either codec.
         assertThrows(ValueException.class, () -> CODEC.unmarshal(m.put("big", Value.ofDouble(1.5)), Narrow.class));
         assertEquals(BigInteger.valueOf(1200), CODEC.unmarshal(m.put("big", Value.ofDecimal(new BigDecimal("12e2"))), Narrow.class).big);
+    }
+
+    // --- codecs that name fields by the annotations of another library -----------
+
+    /** As a JSON library's annotation of a field's name is. */
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.FIELD)
+    @interface JsonName {
+        String value() default "";
+    }
+
+    /** As a MessagePack library's is. */
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.FIELD)
+    @interface PackName {
+        String name();
+    }
+
+    @Retention(RetentionPolicy.RUNTIME)
+    @Target(ElementType.FIELD)
+    @interface Ignore {
+    }
+
+    /** The codecRecord of the Go implementation's value_codec_test.go. */
+    static final class Record {
+        @Name("value_name") @JsonName("json_name") @PackName(name = "msgpack_name") @Sign("record") String name;
+        @Name("value_count") @JsonName("json_count") @PackName(name = "msgpack_count") @OmitEmpty int count;
+        transient String hidden;
+    }
+
+    static final ValueCodec JSON = ValueCodec.DEFAULT.named(JsonName.class, JsonName::value).allowMissing();
+    static final ValueCodec MSGPACK = ValueCodec.DEFAULT.named(PackName.class, PackName::name).allowMissing();
+
+    @Test
+    void codecsNameFieldsByTheirOwnAnnotation() {
+        final Object[][] codecs = {{CODEC, "value_name"}, {JSON, "json_name"}, {MSGPACK, "msgpack_name"}};
+        for (Object[] c : codecs) {
+            final ValueCodec codec = (ValueCodec) c[0];
+            final Record record = new Record();
+            record.name = "ann";
+            record.hidden = "secret";
+            final MapValue m = (MapValue) codec.marshal(record);
+            assertEquals(1, m.size(), m.toString());
+            assertEquals(Value.utf8("ann"), m.get((String) c[1]));
+
+            final Record decoded = codec.unmarshal(m, Record.class);
+            assertEquals("ann", decoded.name);
+            assertEquals(0, decoded.count);
+            assertNull(decoded.hidden);
+
+            // What is signed goes by the names of the codec as well.
+            final MapValue signed = (MapValue) Value.unpack(codec.signBytes(record, "record"));
+            assertEquals(1, signed.size());
+            assertTrue(signed.containsKey((String) c[1]), signed.toString());
+        }
+
+        final Record full = new Record();
+        full.name = "ann";
+        full.count = 7;
+        assertEquals("{\"json_count\": 7,\"json_name\": \"ann\"}", JSON.marshal(full).toString());
+        assertEquals("{\"msgpack_count\": 7,\"msgpack_name\": \"ann\"}", MSGPACK.marshal(full).toString());
+        assertEquals("{\"value_count\": 7,\"value_name\": \"ann\"}", CODEC.marshal(full).toString());
+        // The same codec again, and one derived from it, name the same way.
+        assertEquals(JSON.pack(full).length, JSON.lossless().with(UUID.class, new ValueCodec.Converter<UUID>() {
+            @Override
+            public Value toValue(UUID u) {
+                return Value.utf8(u.toString());
+            }
+
+            @Override
+            public UUID fromValue(Value v) {
+                return UUID.fromString(v.toString());
+            }
+        }).pack(full).length);
+        assertArrayEquals(JSON.pack(full), JSON.lossless().pack(full));
+    }
+
+    @Test
+    void aMissingFieldIsRefusedOnlyByACodecThatRequiresIt() {
+        assertThrows(ValueException.class, () -> CODEC.unmarshal(Value.emptyMap(), Record.class));
+        assertNull(JSON.unmarshal(Value.emptyMap(), Record.class).name);
+        assertNull(MSGPACK.unmarshal(Value.emptyMap(), Record.class).name);
+        // Naming alone does not allow it.
+        final ValueCodec strict = ValueCodec.DEFAULT.named(JsonName.class, JsonName::value);
+        final ValueException e = assertThrows(ValueException.class, () -> strict.unmarshal(Value.emptyMap(), Record.class));
+        assertTrue(e.getMessage().contains("\"json_name\""), e.getMessage());
+    }
+
+    static final class Mixed {
+        @JsonName("renamed") String a = "A";
+        @JsonName String blank = "B";        // an annotation that names nothing
+        String plain = "C";
+        @Name("own") String named = "D";     // Name is not the annotation of this codec
+        @Ignore String ignored = "E";
+        @Unsigned @JsonName("u") int unsigned = -1;
+    }
+
+    @Test
+    void aFieldWithoutTheAnnotationGoesByItsJavaName() {
+        final ValueCodec codec = ValueCodec.DEFAULT.named(JsonName.class, JsonName::value);
+        assertEquals("{\"blank\": \"B\",\"ignored\": \"E\",\"named\": \"D\",\"plain\": \"C\",\"renamed\": \"A\",\"u\": 4294967295}",
+                codec.marshal(new Mixed()).toString());
+        assertEquals("{\"a\": \"A\",\"blank\": \"B\",\"ignored\": \"E\",\"own\": \"D\",\"plain\": \"C\",\"unsigned\": 4294967295}",
+                CODEC.marshal(new Mixed()).toString());
+    }
+
+    @Test
+    void aNamingFunctionMayLeaveFieldsOut() {
+        final ValueCodec codec = ValueCodec.DEFAULT.named(field -> {
+            if (field.isAnnotationPresent(Ignore.class)) {
+                return null;
+            }
+            final JsonName name = field.getAnnotation(JsonName.class);
+            return name == null || name.value().isEmpty() ? field.getName().toUpperCase() : name.value();
+        });
+        final MapValue m = (MapValue) codec.marshal(new Mixed());
+        assertEquals(Arrays.asList("BLANK", "NAMED", "PLAIN", "renamed", "u"), m.keys());
+
+        // Reading does not look for it either, nor set it.
+        final Mixed back = codec.unmarshal(m.put("ignored", Value.utf8("X")).put("IGNORED", Value.utf8("Y")).put("PLAIN", Value.utf8("c")), Mixed.class);
+        assertEquals("E", back.ignored);
+        assertEquals("c", back.plain);
+
+        // A record is made with every component, the one left out at its default.
+        final ValueCodec noB = ValueCodec.DEFAULT.named(field -> field.getName().equals("b") ? null : field.getName());
+        assertEquals("{\"a\": 1,\"c\": 3}", noB.marshal(new Triple(1, "two", 3)).toString());
+        assertEquals(new Triple(1, null, 3), noB.unmarshal(noB.marshal(new Triple(1, "two", 3)), Triple.class));
+
+        // Two fields under one key are refused, whoever named them.
+        final ValueCodec same = ValueCodec.DEFAULT.named(field -> "k");
+        assertThrows(ValueException.class, () -> same.marshal(new Mixed()));
+        assertThrows(NullPointerException.class, () -> ValueCodec.DEFAULT.named(null));
+        assertThrows(NullPointerException.class, () -> ValueCodec.DEFAULT.named(JsonName.class, null));
+    }
+
+    record Triple(int a, String b, int c) {
     }
 }

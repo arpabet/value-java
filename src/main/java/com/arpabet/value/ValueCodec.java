@@ -5,6 +5,7 @@
 
 package com.arpabet.value;
 
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -27,6 +28,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 /**
  * Converts ordinary Java objects to and from values, and gives the bytes to
@@ -97,6 +99,21 @@ import java.util.concurrent.ConcurrentHashMap;
  * without parameters, or, for a record or a class of final fields, with the
  * constructor that takes every field in order.
  *
+ * <h2>Classes annotated for another library</h2>
+ *
+ * The Go implementation has a codec for each dialect of struct tags: its own,
+ * {@code json} and {@code msgpack}. What a Java class carries instead of a
+ * tag is the annotation of the library it was written for, so a codec here is
+ * told how to name a field, {@link #named(Class, Function)}:
+ *
+ * <pre>{@code
+ * ValueCodec gson = ValueCodec.DEFAULT.named(SerializedName.class, SerializedName::value).allowMissing();
+ * }</pre>
+ *
+ * Such a codec changes the keys and nothing else: the value of an object is
+ * still the canonical one, with binary as binary and a date as a timestamp,
+ * not what the other library would write.
+ *
  * <p>A codec is immutable and safe to share; what it learns about a class by
  * reflection it learns once. On Android the rules in the jar tell R8 to keep
  * the annotated fields and the constructors of mapped classes; a field
@@ -119,16 +136,38 @@ public final class ValueCodec {
 
     /** The codec with fields required and numbers converted as Go converts them. */
     public static final ValueCodec DEFAULT =
-            new ValueCodec(false, false, Collections.<Class<?>, Converter<?>>emptyMap());
+            new ValueCodec(false, false, Collections.<Class<?>, Converter<?>>emptyMap(), new Naming(new ByName()));
 
     private final boolean allowMissing;
     private final boolean lossless;
     private final Map<Class<?>, Converter<?>> converters;
+    private final Naming naming;
 
-    private ValueCodec(boolean allowMissing, boolean lossless, Map<Class<?>, Converter<?>> converters) {
+    private ValueCodec(boolean allowMissing, boolean lossless, Map<Class<?>, Converter<?>> converters,
+                       Naming naming) {
         this.allowMissing = allowMissing;
         this.lossless = lossless;
         this.converters = converters;
+        this.naming = naming;
+    }
+
+    /** How a codec names fields, and what it has learned about classes with those names. */
+    private static final class Naming {
+        final Function<? super Field, String> key;
+        final ConcurrentHashMap<Class<?>, ClassInfo> classes = new ConcurrentHashMap<Class<?>, ClassInfo>();
+
+        Naming(Function<? super Field, String> key) {
+            this.key = key;
+        }
+    }
+
+    /** The naming of {@link #DEFAULT}: the {@link Name} of a field, or else its Java name. */
+    private static final class ByName implements Function<Field, String> {
+        @Override
+        public String apply(Field field) {
+            final Name name = field.getAnnotation(Name.class);
+            return name != null && !name.value().isEmpty() ? name.value() : field.getName();
+        }
     }
 
     /**
@@ -137,7 +176,7 @@ public final class ValueCodec {
      * gained fields must for values written before.
      */
     public ValueCodec allowMissing() {
-        return new ValueCodec(true, lossless, converters);
+        return new ValueCodec(true, lossless, converters, naming);
     }
 
     /**
@@ -150,7 +189,7 @@ public final class ValueCodec {
      * codec.
      */
     public ValueCodec lossless() {
-        return new ValueCodec(allowMissing, true, converters);
+        return new ValueCodec(allowMissing, true, converters, naming);
     }
 
     /** The codec that also maps objects of exactly the type through the converter. */
@@ -160,7 +199,77 @@ public final class ValueCodec {
         }
         final Map<Class<?>, Converter<?>> map = new HashMap<Class<?>, Converter<?>>(converters);
         map.put(type, converter);
-        return new ValueCodec(allowMissing, lossless, map);
+        return new ValueCodec(allowMissing, lossless, map, naming);
+    }
+
+    /**
+     * The codec that names a field by another annotation: the key of a field
+     * that carries it is what {@code name} gives for it, and that of any other
+     * field, or of one it gives null or the empty text for, is the Java name.
+     * {@link Name} is not looked at. This is the Go implementation's
+     * {@code JSONValueCodec} and {@code MsgpackValueCodec}, which name the
+     * fields of a struct by its {@code json} or {@code msgpack} tags, for the
+     * annotations Java classes carry instead:
+     *
+     * <pre>{@code
+     * ValueCodec.DEFAULT.named(JsonProperty.class, JsonProperty::value)     // Jackson
+     * ValueCodec.DEFAULT.named(SerializedName.class, SerializedName::value) // Gson
+     * ValueCodec.DEFAULT.named(Json.class, Json::name)                      // Moshi
+     * }</pre>
+     *
+     * <p>Only the keys change. {@link OmitEmpty}, {@link Sign} and
+     * {@link Unsigned} mean what they mean in every codec, and the values are
+     * the canonical ones. The Go codecs of the other dialects also accept a
+     * map that lacks a field; add {@link #allowMissing()} for that.
+     *
+     * <p>Keep the codec, in a constant for instance: what it learns about a
+     * class it learns once, and the codecs made from it share that.
+     *
+     * <p>On Android the rules in the jar keep what the annotations of this
+     * library mark. A class marked only for another library needs that
+     * library's rules, or its own, to keep its fields and a constructor.
+     *
+     * @param annotation an annotation of fields that is kept at run time
+     * @param name the key the annotation gives a field
+     */
+    public <A extends Annotation> ValueCodec named(final Class<A> annotation, final Function<? super A, String> name) {
+        if (annotation == null || name == null) {
+            throw new NullPointerException();
+        }
+        return named(new Function<Field, String>() {
+            @Override
+            public String apply(Field field) {
+                final A a = field.getAnnotation(annotation);
+                final String key = a == null ? null : name.apply(a);
+                return key == null || key.isEmpty() ? field.getName() : key;
+            }
+        });
+    }
+
+    /**
+     * The codec that names fields by a function: the key of each field of a
+     * class, or null for a field that is not part of its value, as a field
+     * another library is told to ignore is not.
+     *
+     * <pre>{@code
+     * ValueCodec jackson = ValueCodec.DEFAULT.named(field -> {
+     *     if (field.isAnnotationPresent(JsonIgnore.class)) {
+     *         return null;
+     *     }
+     *     JsonProperty property = field.getAnnotation(JsonProperty.class);
+     *     return property == null || property.value().isEmpty() ? field.getName() : property.value();
+     * });
+     * }</pre>
+     *
+     * <p>The function is asked once for each field of a class and must give
+     * the same answer every time; static and transient fields are not put to
+     * it.
+     */
+    public ValueCodec named(Function<? super Field, String> naming) {
+        if (naming == null) {
+            throw new NullPointerException("naming");
+        }
+        return new ValueCodec(allowMissing, lossless, converters, new Naming(naming));
     }
 
     /** A converter of an enum to and from the text of its constants' names. */
@@ -277,15 +386,14 @@ public final class ValueCodec {
             return absent(raw(declared));
         }
         if (o instanceof Value) {
-            return (Value) o;
+            return ((Value) o).toImmutable();
         }
         if (!converters.isEmpty()) {
             final Class<?> key = o instanceof Enum ? ((Enum<?>) o).getDeclaringClass() : o.getClass();
             @SuppressWarnings("unchecked")
             final Converter<Object> c = (Converter<Object>) converters.get(key);
             if (c != null) {
-                final Value v = c.toValue(o);
-                return v == null ? NullValue.NULL : v;
+                return ListValue.element(c.toValue(o));
             }
         }
         if (o instanceof String) {
@@ -780,11 +888,10 @@ public final class ValueCodec {
         /** The index of the field among the instance fields of its class. */
         final int position;
 
-        FieldInfo(Field field, int position) {
+        FieldInfo(Field field, int position, String key) {
             this.field = field;
             this.position = position;
-            final Name name = field.getAnnotation(Name.class);
-            this.name = Utf8.canonical(name != null && !name.value().isEmpty() ? name.value() : field.getName());
+            this.name = Utf8.canonical(key);
             this.type = field.getGenericType();
             this.raw = field.getType();
             this.omitEmpty = field.isAnnotationPresent(OmitEmpty.class);
@@ -810,8 +917,6 @@ public final class ValueCodec {
         Class<?>[] allTypes;
     }
 
-    private static final ConcurrentHashMap<Class<?>, ClassInfo> CLASSES = new ConcurrentHashMap<Class<?>, ClassInfo>();
-
     /** Whether a class maps as an object with fields, rather than being a type without a value. */
     private static boolean isStruct(Class<?> c) {
         if (c.isPrimitive() || c.isArray() || c.isEnum() || c.isAnnotation() || c.isInterface()
@@ -824,16 +929,16 @@ public final class ValueCodec {
                 || name.startsWith("sun.") || name.startsWith("com.sun.") || name.startsWith("dalvik."));
     }
 
-    private static ClassInfo info(Class<?> c) {
-        ClassInfo info = CLASSES.get(c);
+    private ClassInfo info(Class<?> c) {
+        ClassInfo info = naming.classes.get(c);
         if (info == null) {
-            info = inspect(c);
-            CLASSES.put(c, info);
+            info = inspect(c, naming.key);
+            naming.classes.put(c, info);
         }
         return info;
     }
 
-    private static ClassInfo inspect(Class<?> c) {
+    private static ClassInfo inspect(Class<?> c, Function<? super Field, String> naming) {
         final ArrayList<Class<?>> chain = new ArrayList<Class<?>>();
         for (Class<?> k = c; k != null && k != Object.class && !k.getName().equals("java.lang.Record"); k = k.getSuperclass()) {
             chain.add(0, k);
@@ -852,13 +957,17 @@ public final class ValueCodec {
                 if (Modifier.isTransient(mod)) {
                     continue;
                 }
+                final String key = naming.apply(field);
+                if (key == null) {
+                    continue; // not part of the value
+                }
                 try {
                     field.setAccessible(true);
                 } catch (RuntimeException e) {
                     throw new ValueException("cannot access field " + k.getName() + "." + field.getName()
                             + " (is its package open to the library?): " + e, e);
                 }
-                final FieldInfo f = new FieldInfo(field, position);
+                final FieldInfo f = new FieldInfo(field, position, key);
                 if (!names.add(f.name)) {
                     throw new ValueException(c.getName() + " has two fields named \"" + f.name + "\"");
                 }

@@ -13,6 +13,8 @@
  * and signed. {@link com.arpabet.value.ValueCodec} maps Java objects to values
  * by name and gives the bytes to sign for them;
  * {@link com.arpabet.value.StructCodec} maps them by field number.
+ * {@link com.arpabet.value.Sealer} seals a value for one reader, with the
+ * NaCl box of the Go implementation.
  * {@link com.arpabet.value.Value#toJson(JsonMode) Lossless JSON} carries every
  * kind through text, and {@link com.arpabet.value.Limits} bounds what decoding
  * accepts from an untrusted source.

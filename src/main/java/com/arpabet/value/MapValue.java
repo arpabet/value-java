@@ -15,6 +15,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.UnaryOperator;
 
 /**
  * A map from text keys to values, kept in the order of the keys' UTF-8 bytes,
@@ -31,9 +32,29 @@ import java.util.Map;
  * }</pre>
  *
  * <p>A map is immutable: {@link #put}, {@link #remove} and the like return
- * another map. Like the Go implementation's, it may hold several entries
- * under one key ({@link #insert}, {@link #select}), which a map read from
- * bytes that repeat a key does; {@link #get} gives the first of them.
+ * another map, and the map is safe to share. Like the Go implementation's, it
+ * may hold several entries under one key ({@link #insert}, {@link #select}),
+ * which a map read from bytes that repeat a key does; {@link #get} gives the
+ * first of them.
+ *
+ * <p>There is a <em>mutable</em> map as well ({@link Value#mutableMap()},
+ * {@link #toMutable()}), on which the same methods change the map itself and
+ * return it, and {@link #update} replaces a value in place:
+ *
+ * <pre>{@code
+ * MapValue event = Value.mutableMap().put("op", Value.utf8("put"));
+ * if (region != null) {
+ *     event.put("region", Value.utf8(region));    // or event = event.put(...), as with any map
+ * }
+ * }</pre>
+ *
+ * <p>A mutable map is a value like any other: it packs, prints and compares
+ * by what it holds at the moment, and equals the immutable map of the same
+ * entries. It is not safe to share between threads while it changes. What a
+ * map holds is always immutable: putting a mutable list or map into another
+ * list or map puts {@linkplain #toImmutable() what it is at that moment},
+ * and later changes to it do not show there. A map read from bytes or text
+ * is never mutable.
  */
 public final class MapValue extends Value implements Iterable<MapValue.Entry> {
 
@@ -42,11 +63,30 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
     /** Canonical strings, ascending by their bytes; equal keys keep the order they were given in. */
     private final String[] keys;
     private final Value[] vals;
+    /**
+     * Null in an immutable map. A mutable map has no entries of its own: it
+     * holds here the immutable map it is at the moment, which every change
+     * replaces by the next.
+     */
+    private final MapValue[] now;
     private int hash;
 
     private MapValue(String[] keys, Value[] vals) {
         this.keys = keys;
         this.vals = vals;
+        this.now = null;
+    }
+
+    /** A mutable map that starts as an immutable one. */
+    private MapValue(MapValue start) {
+        this.keys = null;
+        this.vals = null;
+        this.now = new MapValue[] {start};
+    }
+
+    /** The immutable map this one is, or is at the moment. */
+    private MapValue self() {
+        return now == null ? this : now[0];
     }
 
     /** Takes the arrays without a copy, putting them in order unless they are. */
@@ -97,7 +137,7 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
     }
 
     /** The first position whose key is not below the key. */
-    private int lowerBound(String key) {
+    private static int lowerBound(String[] keys, String key) {
         int lo = 0;
         int hi = keys.length;
         while (lo < hi) {
@@ -111,7 +151,7 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
         return lo;
     }
 
-    private int run(int from, String key) {
+    private static int run(String[] keys, int from, String key) {
         int n = 0;
         while (from + n < keys.length && keys[from + n].equals(key)) {
             n++;
@@ -124,27 +164,48 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
         return Kind.MAP;
     }
 
+    @Override
+    public boolean isMutable() {
+        return now != null;
+    }
+
+    /**
+     * The map itself when it is immutable; otherwise the immutable map of
+     * what this one holds now.
+     */
+    @Override
+    public MapValue toImmutable() {
+        return self();
+    }
+
+    /** A new mutable map of the entries this one has. */
+    public MapValue toMutable() {
+        return new MapValue(self());
+    }
+
     /** The number of entries. */
     public int size() {
-        return keys.length;
+        return self().keys.length;
     }
 
     public boolean isEmpty() {
-        return keys.length == 0;
+        return self().keys.length == 0;
     }
 
     /** Reports whether the map has an entry under the key, whatever its value. */
     public boolean containsKey(String key) {
         key = key(key);
-        final int i = lowerBound(key);
+        final String[] keys = self().keys;
+        final int i = lowerBound(keys, key);
         return i < keys.length && keys[i].equals(key);
     }
 
     /** The value under a key, or the null value when the map has none. */
     public Value get(String key) {
         key = key(key);
-        final int i = lowerBound(key);
-        return i < keys.length && keys[i].equals(key) ? vals[i] : NullValue.NULL;
+        final MapValue m = self();
+        final int i = lowerBound(m.keys, key);
+        return i < m.keys.length && m.keys[i].equals(key) ? m.vals[i] : NullValue.NULL;
     }
 
     /** The boolean under a key; false when there is none. A value of another kind is read from its text. */
@@ -172,27 +233,31 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
         return Coerce.toMap(get(key));
     }
 
-    /** The keys in their order, one per entry. */
+    /** The keys in their order, one per entry. Of a mutable map, the keys it has now. */
     public List<String> keys() {
-        return Collections.unmodifiableList(Arrays.asList(keys));
+        return Collections.unmodifiableList(Arrays.asList(self().keys));
     }
 
-    /** The values in the order of their keys. */
+    /** The values in the order of their keys. Of a mutable map, the values it has now. */
     public List<Value> values() {
-        return Collections.unmodifiableList(Arrays.asList(vals));
+        return Collections.unmodifiableList(Arrays.asList(self().vals));
     }
 
-    /** The entries in the order of their keys, which is the order they encode in. */
+    /**
+     * The entries in the order of their keys, which is the order they encode
+     * in. Of a mutable map, the entries it has now.
+     */
     public List<Entry> entries() {
+        final MapValue m = self();
         return new AbstractList<Entry>() {
             @Override
             public Entry get(int i) {
-                return new Entry(keys[i], vals[i]);
+                return new Entry(m.keys[i], m.vals[i]);
             }
 
             @Override
             public int size() {
-                return keys.length;
+                return m.keys.length;
             }
         };
     }
@@ -207,9 +272,10 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
      * the map has several entries under a key, the last one is kept.
      */
     public Map<String, Value> toMap() {
-        final Map<String, Value> out = new LinkedHashMap<String, Value>(Math.max(16, keys.length * 4 / 3 + 1));
-        for (int i = 0; i < keys.length; i++) {
-            out.put(keys[i], vals[i]);
+        final MapValue m = self();
+        final Map<String, Value> out = new LinkedHashMap<String, Value>(Math.max(16, m.keys.length * 4 / 3 + 1));
+        for (int i = 0; i < m.keys.length; i++) {
+            out.put(m.keys[i], m.vals[i]);
         }
         return out;
     }
@@ -217,33 +283,82 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
     /** A map with the value under the key, in place of the first one there or new. */
     public MapValue put(String key, Value value) {
         key = key(key);
-        final int i = lowerBound(key);
-        final boolean found = i < keys.length && keys[i].equals(key);
-        return splice(i, found ? 1 : 0, key, new Value[] {ListValue.orNull(value)});
+        final Value[] added = {ListValue.element(value)};
+        final MapValue m = self();
+        final int i = lowerBound(m.keys, key);
+        final boolean found = i < m.keys.length && m.keys[i].equals(key);
+        return become(m.splice(i, found ? 1 : 0, key, added));
+    }
+
+    /**
+     * What a method that changes the map gives: the map it made, or, of a
+     * mutable map, the map itself, which is that one from now on.
+     */
+    private MapValue become(MapValue next) {
+        if (now == null) {
+            return next;
+        }
+        now[0] = next;
+        return this;
     }
 
     /** A map with one more entry under the key, before any it has there. */
     public MapValue insert(String key, Value value) {
         key = key(key);
-        return splice(lowerBound(key), 0, key, new Value[] {ListValue.orNull(value)});
+        final Value[] added = {ListValue.element(value)};
+        final MapValue m = self();
+        return become(m.splice(lowerBound(m.keys, key), 0, key, added));
+    }
+
+    /**
+     * Replaces the value of the first entry under a key of a mutable map by
+     * what the function makes of it, in place; null from the function is the
+     * null value. It is the Go implementation's {@code Update}, and like it
+     * does nothing to an immutable map.
+     *
+     * @return whether a value was replaced: false for an immutable map, and when the map has no such key
+     */
+    public boolean update(String key, UnaryOperator<Value> updater) {
+        if (now == null) {
+            return false;
+        }
+        key = key(key);
+        final MapValue m = now[0];
+        final int i = lowerBound(m.keys, key);
+        if (i == m.keys.length || !m.keys[i].equals(key)) {
+            return false;
+        }
+        final Value v = ListValue.element(updater.apply(m.vals[i]));
+        // The function may have changed the map; the entry is looked up again.
+        final MapValue after = now[0];
+        final int at = lowerBound(after.keys, key);
+        if (at == after.keys.length || !after.keys[at].equals(key)) {
+            return false;
+        }
+        final Value[] vals = after.vals.clone();
+        vals[at] = v;
+        now[0] = new MapValue(after.keys, vals);
+        return true;
     }
 
     /** A map without the first entry under the key. */
     public MapValue remove(String key) {
         key = key(key);
-        final int i = lowerBound(key);
-        if (i == keys.length || !keys[i].equals(key)) {
+        final MapValue m = self();
+        final int i = lowerBound(m.keys, key);
+        if (i == m.keys.length || !m.keys[i].equals(key)) {
             return this;
         }
-        return splice(i, 1, key, new Value[0]);
+        return become(m.splice(i, 1, key, new Value[0]));
     }
 
     /** Every value under the key. */
     public List<Value> select(String key) {
         key = key(key);
-        final int i = lowerBound(key);
-        final int n = run(i, key);
-        return Collections.unmodifiableList(new ArrayList<Value>(Arrays.asList(vals).subList(i, i + n)));
+        final MapValue m = self();
+        final int i = lowerBound(m.keys, key);
+        final int n = run(m.keys, i, key);
+        return Collections.unmodifiableList(new ArrayList<Value>(Arrays.asList(m.vals).subList(i, i + n)));
     }
 
     /** A map with an entry under the key for each of the values, before any it has there. */
@@ -252,18 +367,24 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
             return this;
         }
         key = key(key);
-        return splice(lowerBound(key), 0, key, ListValue.orNull(values));
+        final Value[] added = ListValue.elements(values);
+        final MapValue m = self();
+        return become(m.splice(lowerBound(m.keys, key), 0, key, added));
     }
 
     /** A map without any entry under the key. */
     public MapValue deleteAll(String key) {
         key = key(key);
-        final int i = lowerBound(key);
-        final int n = run(i, key);
-        return n == 0 ? this : splice(i, n, key, new Value[0]);
+        final MapValue m = self();
+        final int i = lowerBound(m.keys, key);
+        final int n = run(m.keys, i, key);
+        return n == 0 ? this : become(m.splice(i, n, key, new Value[0]));
     }
 
-    /** The map with {@code removed} entries at position {@code at} replaced by {@code added}, all under one key. */
+    /**
+     * This immutable map with {@code removed} entries at position {@code at}
+     * replaced by {@code added}, all under one key.
+     */
     private MapValue splice(int at, int removed, String key, Value[] added) {
         final int n = keys.length - removed + added.length;
         if (n == 0) {
@@ -283,43 +404,47 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
 
     /** The values as a dense list, in the order of their keys. */
     ListValue valueList() {
+        final Value[] vals = self().vals;
         return vals.length == 0 ? DenseList.EMPTY : new DenseList(vals.clone());
     }
 
     /** The value of the last entry under a canonical key, or null when the map has none. */
     Value last(String key) {
-        final int i = lowerBound(key);
-        final int n = run(i, key);
-        return n == 0 ? null : vals[i + n - 1];
+        final MapValue m = self();
+        final int i = lowerBound(m.keys, key);
+        final int n = run(m.keys, i, key);
+        return n == 0 ? null : m.vals[i + n - 1];
     }
 
     String keyAt(int i) {
-        return keys[i];
+        return self().keys[i];
     }
 
     Value valueAt(int i) {
-        return vals[i];
+        return self().vals[i];
     }
 
     @Override
     void pack(Packer p) {
-        p.mapHeader(keys.length);
-        for (int i = 0; i < keys.length; i++) {
-            p.str(keys[i]);
-            vals[i].pack(p);
+        final MapValue m = self();
+        p.mapHeader(m.keys.length);
+        for (int i = 0; i < m.keys.length; i++) {
+            p.str(m.keys[i]);
+            m.vals[i].pack(p);
         }
     }
 
     @Override
     void jsonify(StringBuilder out) {
+        final MapValue m = self();
         out.append('{');
-        for (int i = 0; i < keys.length; i++) {
+        for (int i = 0; i < m.keys.length; i++) {
             if (i != 0) {
                 out.append(',');
             }
             // The key is written as it is, without escapes, as Go writes it.
-            out.append('"').append(keys[i]).append("\": ");
-            vals[i].jsonify(out);
+            out.append('"').append(m.keys[i]).append("\": ");
+            m.vals[i].jsonify(out);
         }
         out.append('}');
     }
@@ -337,16 +462,18 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
         if (!(o instanceof MapValue)) {
             return false;
         }
-        final MapValue m = (MapValue) o;
-        return Arrays.equals(m.keys, keys) && Arrays.equals(m.vals, vals);
+        final MapValue a = self();
+        final MapValue b = ((MapValue) o).self();
+        return a == b || (Arrays.equals(a.keys, b.keys) && Arrays.equals(a.vals, b.vals));
     }
 
     @Override
     public int hashCode() {
-        int h = hash;
+        final MapValue m = self();
+        int h = m.hash;
         if (h == 0) {
-            h = Arrays.hashCode(keys) * 31 + Arrays.hashCode(vals);
-            hash = h;
+            h = Arrays.hashCode(m.keys) * 31 + Arrays.hashCode(m.vals);
+            m.hash = h;
         }
         return h;
     }
@@ -400,7 +527,7 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
 
         public Builder put(String key, Value value) {
             keys.add(key(key));
-            vals.add(ListValue.orNull(value));
+            vals.add(ListValue.element(value));
             return this;
         }
 
@@ -436,8 +563,9 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
 
         /** Puts every entry of a map. */
         public Builder putAll(MapValue map) {
-            for (int i = 0; i < map.keys.length; i++) {
-                put(map.keys[i], map.vals[i]);
+            final MapValue m = map.self();
+            for (int i = 0; i < m.keys.length; i++) {
+                put(m.keys[i], m.vals[i]);
             }
             return this;
         }

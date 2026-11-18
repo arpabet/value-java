@@ -12,11 +12,16 @@ in the other, and an object signed on one side verifies on the other.
   library passes its conformance vectors unchanged and is checked against the
   Go implementation itself on a corpus of values, bytes and texts
   ([Compatibility](#compatibility-with-the-go-implementation)).
-* **Light.** Pure Java, no dependencies, about 130 KB.
+* **Light.** Pure Java, no dependencies, about 150 KB.
 * **Java 17 bytecode, Android API 24+.** It calls nothing above API 24 (the
   build enforces it), ships its R8 rules, and does not need core library
   desugaring.
-* **Immutable.** Every value is immutable and safe to share between threads.
+* **Sealing included.** `seal` and `unseal` are the Go implementation's NaCl
+  box in pure Java, so a protocol encrypts its messages without a crypto
+  library ([Sealing](#sealing)).
+* **Immutable by default.** A value is immutable and safe to share between
+  threads; lists and maps that change in place are there for building, as in
+  Go ([Building in place](#building-in-place)).
 
 It implements version 1.6.1 of the format.
 
@@ -97,6 +102,90 @@ byte[] digest = Value.ofLong(123).hash("SHA-256");
 Sign the canonical bytes with any signature scheme; verification is stable
 because the same value always packs to the same bytes, here and in Go.
 
+### Sealing
+
+`seal` encrypts the canonical bytes of a value for one reader and
+authenticates them as coming from one writer. It is the Go implementation's
+`Seal`/`Unseal`, a NaCl box (X25519, XSalsa20, Poly1305): bytes sealed by
+either implementation open in the other.
+
+```java
+byte[] alicePrivate = Sealer.newPrivateKey();            // 32 random bytes
+byte[] alicePublic  = Sealer.publicKey(alicePrivate);
+byte[] bobPrivate   = Sealer.newPrivateKey();
+byte[] bobPublic    = Sealer.publicKey(bobPrivate);
+
+byte[] sealed = Value.utf8("secret message").seal(bobPublic, alicePrivate);
+Value opened  = Value.unseal(sealed, alicePublic, bobPrivate);   // ValueException unless authentic
+```
+
+```go
+sealed, _ := value.Seal(value.Utf8("secret message"), bobPublic, alicePrivate)
+opened, _ := value.Unseal(sealed, alicePublic, bobPrivate)
+```
+
+Most of the work of sealing is the agreement between the two keys, which is
+the same for every message between them. A `Sealer` does it once; keep one per
+peer:
+
+```java
+Sealer toBob = Sealer.of(bobPublic, alicePrivate);       // about 40 µs on a laptop, more on a phone
+byte[] sealed = toBob.seal(message);                     // about 1 µs for a small message
+Value opened  = Sealer.of(alicePublic, bobPrivate).unseal(sealed);
+
+byte[] frame = toBob.sealBytes(StructCodec.pack(rpc));   // bytes that are not a value, in the same form
+```
+
+Sealed bytes are a random 24-byte nonce, a 16-byte tag and the encrypted
+bytes: 40 bytes more than what they seal, whose length they do not hide.
+Opening proves the bytes were sealed with one of the two private keys and not
+altered; it is not a signature, since either party could have sealed them.
+Keys are 32 bytes: Go's `box.GenerateKey` and `Sealer.newPrivateKey` /
+`Sealer.publicKey` make the same kind.
+
+### Building in place
+
+`put`, `append` and the like return another value and leave the one they were
+called on as it is. Building a large list that way copies it at every step,
+so, as in Go, there are lists and maps that change in place: the same methods
+change the collection itself and return it.
+
+```java
+ListValue rows = Value.mutableList();
+for (Row row : result) {
+    rows.append(encode(row));                       // no copy of what is already there
+}
+
+MapValue event = Value.mutableMap().put("op", Value.utf8("put"));
+if (region != null) {
+    event.put("region", Value.utf8(region));        // or event = event.put(...), as with any map
+}
+event.update("seq", old -> ((NumberValue) old).add(Value.ofLong(1)));   // false: there is no "seq"
+```
+
+A mutable collection is a value like any other: it packs, seals, prints and
+compares by what it holds at the moment. Three things keep the rest of the
+library's promises:
+
+* **What a list or a map holds is immutable.** Putting a mutable collection
+  into another one puts what it is at that moment (`toImmutable()`); later
+  changes to it do not show there. Build the inner one first.
+* **Nothing read is mutable**: not from bytes, JSON, sealed bytes or a codec.
+* A mutable collection is not safe to share between threads while it changes;
+  `toImmutable()` gives one that is.
+
+| Go | Java |
+|---|---|
+| `EmptyMutableMap()`, `EmptyMap(false)` | `Value.mutableMap()` |
+| `EmptyImmutableMap()`, `EmptyMap(true)` | `Value.emptyMap()` |
+| `SortedMapOf(m)`, `ImmutableMapOf(m)` | `Value.mapOf(m)`, and `.toMutable()` |
+| `EmptyMutableList()`, `EmptyList(false)` | `Value.mutableList()` |
+| `EmptyImmutableList()`, `EmptyList(true)` | `Value.emptyList()` |
+| `Tuple(a, b)`, `Single(a)`, `ImmutableList(s)`, `MutableList(s)` | `Value.list(a, b)`, `Value.listOf(collection)` |
+| `EmptySparseList()` | `Value.emptySparseList()`, `Value.mutableSparseList()` |
+| `m.Update(key, updater)`, `l.UpdateAt(i, updater)` | `m.update(key, fn)`, `l.updateAt(i, fn)` |
+| `ImmutableMapCopyOf(m)`, `SortedMapCopyOf(m)` | `m.toImmutable()`, `m.toMutable()` |
+
 ## Objects
 
 `ValueCodec` maps ordinary Java objects to values and back, and gives the
@@ -172,6 +261,31 @@ with the constructor that takes every field in order.
 **Other types** (an enum, a UUID, a domain type) map through a converter:
 `ValueCodec.DEFAULT.with(Color.class, ValueCodec.enumNames(Color.class))`.
 
+**Classes annotated for another library.** The Go implementation has a codec
+per dialect of struct tags (`value`, `json`, `msgpack`), so that a struct
+tagged for another serializer needs no second set of tags. What a Java class
+carries instead of a tag is the annotation of the library it was written for,
+so a codec here is told which one names a field:
+
+```java
+ValueCodec jackson = ValueCodec.DEFAULT.named(JsonProperty.class, JsonProperty::value).allowMissing();
+ValueCodec gson    = ValueCodec.DEFAULT.named(SerializedName.class, SerializedName::value).allowMissing();
+ValueCodec moshi   = ValueCodec.DEFAULT.named(Json.class, Json::name).allowMissing();
+```
+
+| Go | Java |
+|---|---|
+| `DefaultValueCodec()` | `ValueCodec.DEFAULT` |
+| `JSONValueCodec()`, `MsgpackValueCodec()` | `ValueCodec.DEFAULT.named(annotation, name).allowMissing()` |
+| `codec.AllowMissing()`, `codec.Lossless()` | `codec.allowMissing()`, `codec.lossless()` |
+
+Only the keys change: the value of an object is still the canonical one
+(binary as binary, a date as a timestamp), not what the other library would
+write, and `@OmitEmpty`, `@Sign` and `@Unsigned` mean what they mean in every
+codec. A field without the annotation goes by its Java name; a function of
+the field (`named(field -> …)`) can also leave fields out, as a library's
+"ignore" annotation does.
+
 ### Numeric schema
 
 `StructCodec` is the compact, protobuf-style dialect of the Go implementation's
@@ -232,7 +346,21 @@ Value v = Value.unpack(bytes, tight);       // ValueException beyond a limit
 `Value.unpack` reads the first value of an array and does not look at what
 follows it, as Go's `Unpack` does; an `Unpacker` reads values in a row and
 tells where each one ends. `Value.read(InputStream)` takes exactly the bytes
-of one value from a stream.
+of one value from a stream, and gives null at its end: a loop over it, and
+over `writeTo`, is what Go's `ReadStream` and `WriteStream` are over channels.
+
+### Bytes written before v1.5.0
+
+Before v1.5.0 of the Go implementation a big integer travelled as Go's gob
+encoding and a decimal as shopspring's `MarshalBinary`. Those layouts cannot
+be told from the portable ones by looking at the bytes, so a decoder never
+guesses: it reads them when the limits say so. This is Go's
+`LegacyBigNumbers`, here a property of the call instead of the process.
+
+```java
+Limits old = Limits.DEFAULT.withLegacyBigNumbers(true);
+byte[] migrated = Value.unpack(stored, old).pack();     // packing always writes the portable layout
+```
 
 ## Android
 
@@ -244,6 +372,11 @@ of one value from a stream.
   an annotation is mapped by its Java name, which a shrinker changes: name
   every field of a class that goes on the wire.
 * The codecs use reflection once per class and cache what they learn.
+* Sealing is the same code on every API level: it takes nothing from the
+  platform but `SecureRandom`, for keys and nonces.
+* A class that carries only another library's annotations (`ValueCodec.named`)
+  needs that library's rules, or its own, to keep its fields and a
+  constructor.
 
 ## Compatibility with the Go implementation
 
@@ -252,25 +385,40 @@ What is checked, by `./gradlew build`:
 * **The conformance vectors** of the format (`testdata/canonical.json` of the
   Go repository, copied unchanged): bytes, decoding, text and canonical JSON.
 * **A golden corpus written by the Go implementation** (`conformance/`, about
-  10,000 cases in `src/test/resources/golden`): for canonical, non-canonical,
+  11,600 cases in `src/test/resources/golden`): for canonical, non-canonical,
   mutated and random bytes, what Go decodes, re-encodes and renders (both JSON
   modes, `String()`, `Jsonify`); JSON texts and what they parse to; the
   shortest text of doubles and floats; timestamps both ways; every number
   conversion, exact and wrapping; base64; the typed getters; and structs
   through `Marshal`, `SignBytes` and `PackStruct`, with twins of the Go
   structs on this side.
+* **Sealing**, against `golang.org/x/crypto`: X25519 (with the points of small
+  order and the encodings above the modulus), HSalsa20, Poly1305, and boxes of
+  every length around a block. Go's `Seal` draws a nonce and nothing else, so
+  with the nonce given the bytes sealed here must be, and are, the very bytes
+  Go sealed and its `Unseal` opened; and what `Unseal` says to altered, cut
+  and foreign bytes is what `unseal` says. The field arithmetic is also
+  checked against `BigInteger`, and X25519 against the JDK's.
+* **The layouts of before v1.5.0**, against Go with `LegacyBigNumbers` set.
 
 A larger corpus takes seconds to write and check (it needs Go 1.25+):
 
 ```sh
 cd conformance && go run . -out /tmp/golden -scale 80 -seed 7 && cd ..
-./gradlew test -PgoldenDir=/tmp/golden      # about 580,000 cases
+./gradlew test -PgoldenDir=/tmp/golden      # about 640,000 cases
 ```
 
 Where the two differ, on purpose:
 
-* **Everything is immutable.** There are no mutable lists or maps and no
-  in-place `Update`; `put`, `append` and the like return another value.
+* **A mutable list or map changes in place and nothing else does.** Go's may
+  share storage with the one it was derived from, so that the older one is to
+  be left alone; here the method changes the collection and returns it, there
+  is no older one, and nothing is shared. What a collection holds is
+  immutable: a mutable one put into another is put as it is at that moment,
+  where in Go the two would go on sharing the entries.
+* **A public key of small order is refused.** There are a dozen 32-byte
+  strings that give every private key the same shared key, which is then no
+  secret; Go's box seals with it, `Sealer.of` throws. No honest key is one.
 * **`equals` is equality of canonical bytes for every pair of values.** Text
   and binary over the same bytes are different, and so are a dense and a
   sparse list with the same elements, where Go's `Equal` is looser (and not
@@ -292,9 +440,12 @@ Where the two differ, on purpose:
   integer key of 2^31 or more is a map key.
 * **A double outside the range of a long** converts to the nearest long;
   Go leaves that to the platform.
-* **Not here:** `Seal`/`Unseal` (NaCl box), `LegacyBigNumbers` (the layouts
-  from before v1.5.0), the `json` and `msgpack` struct-tag profiles, and
-  channel streams.
+* **`LegacyBigNumbers` is a property of the limits** passed to a decoder, not
+  a global switch, and a codec for another dialect is told which annotation
+  names a field instead of reading a `json` or `msgpack` tag.
+* **The formatting knobs** (`Base64Prefix`, `DecimalExpDelim`,
+  `UnknownPrefix`, `FirstIndexKey`, `AllowFastAppends`) are not variables:
+  the texts are the ones Go writes by default.
 
 ## Building
 
