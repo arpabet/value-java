@@ -144,35 +144,52 @@ class ReadmeTest {
     }
 
     @Test
-    void buildingInPlace() {
-        final ListValue rows = Value.mutableList();
-        for (int row = 0; row < 3; row++) {
-            rows.append(Value.ofLong(row));
-        }
-        assertEquals("[0,1,2]", rows.toString());
+    void mutableListsAndMaps() {
+        final MapValue a = Value.emptyMap();
+        final MapValue b = a.put("k", Value.ofLong(1));
+        assertTrue(a.isEmpty());
+        assertEquals(1, b.size());
 
-        final String region = "eu";
-        final MapValue event = Value.mutableMap().put("op", Value.utf8("put"));
-        if (region != null) {
-            event.put("region", Value.utf8(region));
-        }
-        assertEquals(false, event.update("seq", old -> ((NumberValue) old).add(Value.ofLong(1))));
-        assertEquals("{\"op\": \"put\",\"region\": \"eu\"}", event.toString());
+        final MapValue event = Value.mutableMap();
+        event.put("op", Value.utf8("put"));
+        assertEquals(1, event.size());
 
-        // What a collection holds is what was put, as it was then.
-        final MapValue outer = Value.emptyMap().put("rows", rows);
-        rows.append(Value.ofLong(3));
-        assertEquals("{\"rows\": [0,1,2]}", outer.toString());
-        assertEquals(Value.list(Value.ofLong(0), Value.ofLong(1), Value.ofLong(2), Value.ofLong(3)), rows.toImmutable());
-        assertEquals(Value.mapOf(java.util.Collections.singletonMap("a", Value.ofLong(1))),
-                Value.mapOf(java.util.Collections.singletonMap("a", Value.ofLong(1))).toMutable());
+        final ListValue keys = Value.mutableList();
+        event.put("keys", keys);
+        keys.append(Value.utf8("k1"));
+        assertEquals("{\"keys\": [\"k1\"],\"op\": \"put\"}", event.toString());
+
+        assertTrue(event.update("op", old -> Value.utf8(old + "!")));
+        assertEquals(false, event.update("seq", old -> old));
+        final byte[] wire = event.pack();
+        assertEquals(MapValue.builder().put("keys", Value.list(Value.utf8("k1"))).put("op", "put!").build(), Value.unpack(wire));
+
+        // An immutable map takes a copy of a mutable list.
+        final MapValue fixed = Value.emptyMap().put("keys", keys);
+        keys.append(Value.utf8("k2"));
+        assertEquals("{\"keys\": [\"k1\"]}", fixed.toString());
+        assertEquals("{\"keys\": [\"k1\",\"k2\"],\"op\": \"put!\"}", event.toString());
+
+        // toImmutable copies all the way down; toMutable gives a new mutable one of the same elements.
+        final MapValue frozen = event.toImmutable();
+        keys.append(Value.utf8("k3"));
+        assertEquals("{\"keys\": [\"k1\",\"k2\"],\"op\": \"put!\"}", frozen.toString());
+        final MapValue again = frozen.toMutable();
+        again.put("n", Value.ofLong(1));
+        assertEquals(2, frozen.size());
+        assertEquals(3, again.size());
     }
 
     @Test
     void bytesWrittenBeforeTheBigNumbersBecamePortable() {
         final byte[] stored = Hex.decode("d501027b");      // 123 as Go's gob encoding
-        final Limits old = Limits.DEFAULT.withLegacyBigNumbers(true);
-        final byte[] migrated = Value.unpack(stored, old).pack();
+        final byte[] migrated;
+        Value.setLegacyBigNumbers(true);
+        try {
+            migrated = Value.unpack(stored).pack();
+        } finally {
+            Value.setLegacyBigNumbers(false);
+        }
         assertEquals("d4017b", Hex.encode(migrated));
         assertEquals(Value.ofBigInt(BigInteger.valueOf(123)), Value.unpack(migrated));
     }

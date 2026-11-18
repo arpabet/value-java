@@ -24,10 +24,10 @@ import java.util.Map;
  * decimal), a string (text or binary), a timestamp, a list (dense or sparse),
  * a map with text keys, or an extension the format does not define. Values
  * form trees, are immutable and are safe to share between threads. The one
- * exception is a list or a map asked for as mutable ({@link #mutableList()},
- * {@link #mutableMap()}), which changes in place while it is being built;
- * nothing read from bytes or text is ever one, and what any list or map holds
- * is immutable.
+ * exception is a list or a map made as a mutable one ({@link #mutableList()},
+ * {@link #mutableMap()}), which is an ordinary mutable object; nothing read
+ * from bytes or text is ever one, and an immutable list or map never holds
+ * one.
  *
  * <p>{@link #pack()} gives the canonical MessagePack bytes of a value: the
  * same value always encodes to exactly the same bytes, so the bytes can be
@@ -182,21 +182,10 @@ public abstract sealed class Value
      * @param type the extension type, -128 to 127 (0 to 255 is accepted as the byte)
      */
     public static Value ext(int type, byte[] data) {
-        return ext(type, data, Limits.DEFAULT);
-    }
-
-    /**
-     * The value of a MessagePack extension as the decoder reads it within the
-     * limits, which also say {@linkplain Limits#withLegacyBigNumbers which
-     * layout} the data of a big integer or a decimal is in.
-     *
-     * @throws ValueException when the data is not that of the type, or exceeds a limit
-     */
-    public static Value ext(int type, byte[] data, Limits limits) {
         if (type < -128 || type > 255) {
             throw new IllegalArgumentException("extension type " + type);
         }
-        return Unpacker.extension((byte) type, data.clone(), limits);
+        return Unpacker.extension((byte) type, data.clone(), Limits.DEFAULT);
     }
 
     /** A dense list of the items; a null item is the null value. */
@@ -228,22 +217,22 @@ public abstract sealed class Value
     }
 
     /**
-     * A new, empty dense list that changes in place: {@code append} and the
-     * like change the list itself and return it. It is the Go
-     * implementation's {@code EmptyMutableList}; see {@link ListValue}.
+     * A new, empty mutable dense list: {@code append} and the like change the
+     * list itself, and return it. It is the Go implementation's
+     * {@code EmptyMutableList}; see {@link ListValue}.
      */
     public static ListValue mutableList() {
         return new MutableDenseList(DenseList.EMPTY);
     }
 
-    /** A new, empty sparse list that changes in place. */
+    /** A new, empty mutable sparse list. */
     public static ListValue mutableSparseList() {
         return new MutableSparseList(SparseList.EMPTY);
     }
 
     /**
-     * A new, empty map that changes in place: {@code put} and the like change
-     * the map itself and return it. It is the Go implementation's
+     * A new, empty mutable map: {@code put} and the like change the map
+     * itself, and return it. It is the Go implementation's
      * {@code EmptyMutableMap}; see {@link MapValue}.
      */
     public static MapValue mutableMap() {
@@ -270,8 +259,9 @@ public abstract sealed class Value
     }
 
     /**
-     * Reports whether this is a list or a map that changes in place. Any
-     * other value never changes and is safe to share between threads.
+     * Reports whether this is a mutable list or map. Any other value never
+     * changes, nor does anything it holds, and is safe to share between
+     * threads.
      */
     public boolean isMutable() {
         return false;
@@ -279,8 +269,10 @@ public abstract sealed class Value
 
     /**
      * The value itself, unless it is a mutable list or map: then an immutable
-     * one that holds what it holds now and is not affected by what happens to
-     * it later.
+     * copy of what it holds now, with the mutable lists and maps inside it
+     * copied the same way, which nothing that happens later changes.
+     *
+     * @throws ValueException when a mutable list or map holds itself
      */
     public Value toImmutable() {
         return this;
@@ -385,6 +377,65 @@ public abstract sealed class Value
         return new Unpacker(in).limits(limits).readNext();
     }
 
+    // --- bytes written before v1.5.0 -----------------------------------------------
+
+    private static volatile boolean legacyBigNumbers;
+
+    /**
+     * Makes every decoder read big integers and decimals in the layouts the Go
+     * implementation wrote before its v1.5.0, or, with false, in the ones in
+     * use since. It is the Go implementation's {@code LegacyBigNumbers}, and
+     * like it a switch for the whole process, off unless it is set.
+     *
+     * <p>Before v1.5.0 the payload of a big integer (extension 1) was Go's gob
+     * encoding of it, a byte of version and sign followed by the magnitude,
+     * and that of a decimal (extension 2) a 4-byte exponent followed by that
+     * encoding of the coefficient. Since then they are the two's-complement
+     * layouts every implementation reads. The two cannot be told apart from
+     * the bytes, so a decoder never guesses: it reads the old layouts while
+     * this switch is on, and only then. Packing always writes the layouts in
+     * use now, so migrating stored bytes is reading them with the switch on
+     * and packing what was read:
+     *
+     * <pre>{@code
+     * Value.setLegacyBigNumbers(true);
+     * byte[] migrated = Value.unpack(stored).pack();
+     * Value.setLegacyBigNumbers(false);
+     * }</pre>
+     *
+     * <p>The switch is read by {@link #unpack(byte[])}, {@link #read(InputStream)},
+     * {@link Unpacker}, {@link #ext(int, byte[])}, the {@code $ext} wrapper of
+     * {@link #parseJson(String)} and the codecs, on every thread.
+     */
+    public static void setLegacyBigNumbers(boolean legacy) {
+        legacyBigNumbers = legacy;
+    }
+
+    /** Whether the decoders read big numbers in the layouts of before v1.5.0; see {@link #setLegacyBigNumbers}. */
+    public static boolean legacyBigNumbers() {
+        return legacyBigNumbers;
+    }
+
+    /**
+     * The big integer of a payload written before v1.5.0, whatever the switch
+     * says: the Go implementation's {@code UnpackLegacyBigInt}.
+     *
+     * @throws ValueException when the payload is not Go's gob encoding of a big integer
+     */
+    public static BigInteger unpackLegacyBigInt(byte[] payload) {
+        return Unpacker.legacyBigInt(payload, 0);
+    }
+
+    /**
+     * The decimal of a payload written before v1.5.0, whatever the switch
+     * says: the Go implementation's {@code UnpackLegacyDecimal}.
+     *
+     * @throws ValueException when the payload is not such a decimal, or its exponent exceeds the default limit
+     */
+    public static BigDecimal unpackLegacyDecimal(byte[] payload) {
+        return Unpacker.legacyDecimal(payload, Limits.DEFAULT);
+    }
+
     // --- sealing -------------------------------------------------------------
 
     /**
@@ -397,7 +448,7 @@ public abstract sealed class Value
      *
      * @param recipientPublicKey the 32-byte public key of the reader
      * @param senderPrivateKey the 32-byte private key of the writer
-     * @throws ValueException when a key is not 32 bytes or the public key is not one an honest peer has
+     * @throws ValueException when a key is not 32 bytes
      */
     public final byte[] seal(byte[] recipientPublicKey, byte[] senderPrivateKey) {
         return Sealer.of(recipientPublicKey, senderPrivateKey).seal(this);
@@ -442,7 +493,11 @@ public abstract sealed class Value
      */
     public final String jsonify() {
         final StringBuilder out = new StringBuilder();
-        jsonify(out);
+        try {
+            jsonify(out);
+        } catch (StackOverflowError e) {
+            throw new ValueException("value is nested too deeply to print");
+        }
         return out.toString();
     }
 

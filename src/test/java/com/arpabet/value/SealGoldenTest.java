@@ -96,6 +96,19 @@ class SealGoldenTest {
                         r.same("sealBytes opened", line, f[5], hex(recipient.unsealBytes(fresh)));
                         break;
                     }
+                    case "smallorder": {
+                        // A public key that is nobody's: Go seals to it, and so must this.
+                        final byte[] priv = bytes(f[1]);
+                        final byte[] other = bytes(f[2]);
+                        final byte[] pub = bytes(f[3]);
+                        final byte[] m = bytes(f[4]);
+                        final byte[] sealed = bytes(f[5]);
+                        r.same("box to a point of small order", line, f[5],
+                                hex(Sealer.of(pub, priv).box(Arrays.copyOf(sealed, 24), m, 0, m.length)));
+                        r.same("opened", line, f[4], hex(Sealer.of(pub, priv).unsealBytes(sealed)));
+                        r.same("opened under another private key", line, f[4], hex(Sealer.of(pub, other).unsealBytes(sealed)));
+                        break;
+                    }
                     case "seal": {
                         final byte[] senderPrivate = bytes(f[1]);
                         final byte[] senderPublic = bytes(f[2]);
@@ -130,7 +143,7 @@ class SealGoldenTest {
             }
         }
         r.done();
-        assertTrue(kinds.containsAll(Arrays.asList("x25519", "hsalsa20", "poly1305", "secretbox", "box", "seal", "unseal")),
+        assertTrue(kinds.containsAll(Arrays.asList("x25519", "hsalsa20", "poly1305", "secretbox", "box", "smallorder", "seal", "unseal")),
                 "seal.tsv lacks a kind: " + kinds);
     }
 }

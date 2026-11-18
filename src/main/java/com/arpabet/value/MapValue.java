@@ -31,30 +31,43 @@ import java.util.function.UnaryOperator;
  * m.getNumber("apple").longValue() // 2
  * }</pre>
  *
- * <p>A map is immutable: {@link #put}, {@link #remove} and the like return
- * another map, and the map is safe to share. Like the Go implementation's, it
- * may hold several entries under one key ({@link #insert}, {@link #select}),
- * which a map read from bytes that repeat a key does; {@link #get} gives the
- * first of them.
+ * <p>Like the Go implementation's, a map may hold several entries under one
+ * key ({@link #insert}, {@link #select}), which a map read from bytes that
+ * repeat a key does; {@link #get} gives the first of them.
  *
- * <p>There is a <em>mutable</em> map as well ({@link Value#mutableMap()},
- * {@link #toMutable()}), on which the same methods change the map itself and
- * return it, and {@link #update} replaces a value in place:
+ * <h2>Immutable and mutable maps</h2>
+ *
+ * A map is one or the other from the moment it is made, and
+ * {@link #isMutable()} tells which.
+ *
+ * <p>An <em>immutable</em> map ({@link #builder()}, {@link Value#emptyMap()},
+ * {@link Value#mapOf}, and every map read from bytes or text) never changes:
+ * {@link #put}, {@link #remove} and the like leave it as it is and return
+ * another map. It is safe to share between threads.
+ *
+ * <p>A <em>mutable</em> map ({@link Value#mutableMap()}, {@link #toMutable()})
+ * is an ordinary mutable object, as a {@code TreeMap} is: the same methods
+ * change the map itself, and return it so that calls can be chained;
+ * {@link #update} replaces a value in place.
  *
  * <pre>{@code
- * MapValue event = Value.mutableMap().put("op", Value.utf8("put"));
- * if (region != null) {
- *     event.put("region", Value.utf8(region));    // or event = event.put(...), as with any map
- * }
+ * MapValue event = Value.mutableMap();
+ * event.put("op", Value.utf8("put"));              // event itself has the entry now
+ * ListValue keys = Value.mutableList();
+ * event.put("keys", keys);
+ * keys.append(Value.utf8("k1"));                   // and shows in event: it is the same list
  * }</pre>
  *
- * <p>A mutable map is a value like any other: it packs, prints and compares
- * by what it holds at the moment, and equals the immutable map of the same
- * entries. It is not safe to share between threads while it changes. What a
- * map holds is always immutable: putting a mutable list or map into another
- * list or map puts {@linkplain #toImmutable() what it is at that moment},
- * and later changes to it do not show there. A map read from bytes or text
- * is never mutable.
+ * <p>A mutable map holds what is put into it as it is: a mutable list or map
+ * inside it is that same object, and changing it later shows in the map. An
+ * immutable map cannot hold something that changes, so it takes a mutable
+ * list or map as an immutable copy of what it is at that moment.
+ *
+ * <p>A mutable map is a value like any other: it packs, seals, prints and
+ * compares by what it holds when asked, and equals the immutable map of the
+ * same entries. {@link #toImmutable()} gives an immutable copy, all the way
+ * down. A mutable map must not be changed by one thread while another uses
+ * it, and must not come to hold itself.
  */
 public final class MapValue extends Value implements Iterable<MapValue.Entry> {
 
@@ -65,8 +78,10 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
     private final Value[] vals;
     /**
      * Null in an immutable map. A mutable map has no entries of its own: it
-     * holds here the immutable map it is at the moment, which every change
-     * replaces by the next.
+     * holds here its state, a map that every change replaces by the next.
+     * Unlike a map of its own, the state holds the values as they were given,
+     * mutable lists and maps included, and is handed out as an immutable map
+     * only when it holds none.
      */
     private final MapValue[] now;
     private int hash;
@@ -84,9 +99,28 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
         this.now = new MapValue[] {start};
     }
 
-    /** The immutable map this one is, or is at the moment. */
+    /** Where the entries are: this map, or the state of a mutable one. */
     private MapValue self() {
         return now == null ? this : now[0];
+    }
+
+    /** A value as this map holds it: an immutable one an immutable copy, a mutable one the value itself. */
+    private Value hold(Value v) {
+        return now == null ? ListValue.element(v) : ListValue.held(this, v);
+    }
+
+    /** This map when nothing it holds is mutable; otherwise a copy that holds immutable copies. */
+    private MapValue frozen() {
+        Value[] v = null;
+        for (int i = 0; i < vals.length; i++) {
+            if (vals[i].isMutable()) {
+                if (v == null) {
+                    v = vals.clone();
+                }
+                v[i] = vals[i].toImmutable();
+            }
+        }
+        return v == null ? this : new MapValue(keys, v);
     }
 
     /** Takes the arrays without a copy, putting them in order unless they are. */
@@ -170,15 +204,26 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
     }
 
     /**
-     * The map itself when it is immutable; otherwise the immutable map of
-     * what this one holds now.
+     * The map itself when it is immutable; otherwise an immutable map of what
+     * this one holds now, with every mutable list or map inside it copied the
+     * same way.
      */
     @Override
     public MapValue toImmutable() {
-        return self();
+        if (now == null) {
+            return this;
+        }
+        try {
+            return now[0].frozen();
+        } catch (StackOverflowError e) {
+            throw ListValue.cyclic();
+        }
     }
 
-    /** A new mutable map of the entries this one has. */
+    /**
+     * A new mutable map of the entries this one has. The values are not
+     * copied: a mutable list or map among them is in both maps.
+     */
     public MapValue toMutable() {
         return new MapValue(self());
     }
@@ -283,7 +328,7 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
     /** A map with the value under the key, in place of the first one there or new. */
     public MapValue put(String key, Value value) {
         key = key(key);
-        final Value[] added = {ListValue.element(value)};
+        final Value[] added = {hold(value)};
         final MapValue m = self();
         final int i = lowerBound(m.keys, key);
         final boolean found = i < m.keys.length && m.keys[i].equals(key);
@@ -305,7 +350,7 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
     /** A map with one more entry under the key, before any it has there. */
     public MapValue insert(String key, Value value) {
         key = key(key);
-        final Value[] added = {ListValue.element(value)};
+        final Value[] added = {hold(value)};
         final MapValue m = self();
         return become(m.splice(lowerBound(m.keys, key), 0, key, added));
     }
@@ -328,7 +373,7 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
         if (i == m.keys.length || !m.keys[i].equals(key)) {
             return false;
         }
-        final Value v = ListValue.element(updater.apply(m.vals[i]));
+        final Value v = ListValue.held(this, updater.apply(m.vals[i]));
         // The function may have changed the map; the entry is looked up again.
         final MapValue after = now[0];
         final int at = lowerBound(after.keys, key);
@@ -367,7 +412,7 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
             return this;
         }
         key = key(key);
-        final Value[] added = ListValue.elements(values);
+        final Value[] added = now == null ? ListValue.elements(values) : ListValue.heldAll(this, values);
         final MapValue m = self();
         return become(m.splice(lowerBound(m.keys, key), 0, key, added));
     }
@@ -402,9 +447,9 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
         return new MapValue(k, v);
     }
 
-    /** The values as a dense list, in the order of their keys. */
+    /** The values as an immutable dense list, in the order of their keys. */
     ListValue valueList() {
-        final Value[] vals = self().vals;
+        final Value[] vals = toImmutable().vals;
         return vals.length == 0 ? DenseList.EMPTY : new DenseList(vals.clone());
     }
 
@@ -462,14 +507,15 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
         if (!(o instanceof MapValue)) {
             return false;
         }
-        final MapValue a = self();
-        final MapValue b = ((MapValue) o).self();
+        final MapValue a = toImmutable();
+        final MapValue b = ((MapValue) o).toImmutable();
         return a == b || (Arrays.equals(a.keys, b.keys) && Arrays.equals(a.vals, b.vals));
     }
 
     @Override
     public int hashCode() {
-        final MapValue m = self();
+        // Of a mutable map, the hash of an immutable copy: its state may hold what changes.
+        final MapValue m = toImmutable();
         int h = m.hash;
         if (h == 0) {
             h = Arrays.hashCode(m.keys) * 31 + Arrays.hashCode(m.vals);

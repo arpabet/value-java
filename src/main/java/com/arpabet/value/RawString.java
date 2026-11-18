@@ -11,8 +11,6 @@ import java.util.Arrays;
 /** Binary. The array is never handed out or changed. */
 final class RawString extends StringValue {
 
-    static final String BASE64_PREFIX = "base64,";
-
     private final byte[] value;
 
     /** Takes the array without a copy. */

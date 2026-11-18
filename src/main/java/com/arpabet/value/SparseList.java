@@ -68,15 +68,53 @@ final class SparseList extends ListValue {
         return false;
     }
 
-    /** The list with the first value at the index replaced by what the function makes of it, or null when it has none. */
-    SparseList updated(int index, UnaryOperator<Value> updater) {
+    // What a mutable list does, which holds a value as it is given: a list
+    // made here may hold a mutable list or map, and is then the state of a
+    // mutable list and never a list of its own.
+
+    SparseList appended(Value held) {
+        final int n = keys.length;
+        return splice(n, 0, n == 0 ? 0 : keys[n - 1] + 1, new Value[] {held});
+    }
+
+    SparseList put(int index, Value held) {
         final int i = lowerBound(index);
-        if (i == keys.length || keys[i] != index) {
-            return null;
-        }
+        final boolean found = i < keys.length && keys[i] == index;
+        return splice(i, found ? 1 : 0, index, new Value[] {held});
+    }
+
+    SparseList inserted(int index, Value[] held) {
+        return held.length == 0 ? this : splice(lowerBound(index), 0, index, held);
+    }
+
+    /** The position of the first value at an index, or -1 when the list has none. */
+    int position(int index) {
+        final int i = lowerBound(index);
+        return i < keys.length && keys[i] == index ? i : -1;
+    }
+
+    Value at(int position) {
+        return vals[position];
+    }
+
+    SparseList replaced(int position, Value held) {
         final Value[] v = vals.clone();
-        v[i] = element(updater.apply(v[i]));
+        v[position] = held;
         return new SparseList(keys, v);
+    }
+
+    /** This list when nothing it holds is mutable; otherwise a copy that holds immutable copies. */
+    SparseList frozen() {
+        Value[] v = null;
+        for (int i = 0; i < vals.length; i++) {
+            if (vals[i].isMutable()) {
+                if (v == null) {
+                    v = vals.clone();
+                }
+                v[i] = vals[i].toImmutable();
+            }
+        }
+        return v == null ? this : new SparseList(keys, v);
     }
 
     /** The first position whose index is not below the key. */
@@ -155,20 +193,17 @@ final class SparseList extends ListValue {
 
     @Override
     public ListValue append(Value value) {
-        final int n = keys.length;
-        return splice(n, 0, n == 0 ? 0 : keys[n - 1] + 1, new Value[] {element(value)});
+        return appended(element(value));
     }
 
     @Override
     public ListValue putAt(int index, Value value) {
-        final int i = lowerBound(index);
-        final boolean found = i < keys.length && keys[i] == index;
-        return splice(i, found ? 1 : 0, index, new Value[] {element(value)});
+        return put(index, element(value));
     }
 
     @Override
     public ListValue insertAt(int index, Value value) {
-        return splice(lowerBound(index), 0, index, new Value[] {element(value)});
+        return inserted(index, new Value[] {element(value)});
     }
 
     @Override
@@ -197,10 +232,7 @@ final class SparseList extends ListValue {
 
     @Override
     public ListValue insertAll(int index, Collection<? extends Value> values) {
-        if (values.isEmpty()) {
-            return this;
-        }
-        return splice(lowerBound(index), 0, index, elements(values));
+        return inserted(index, elements(values));
     }
 
     @Override

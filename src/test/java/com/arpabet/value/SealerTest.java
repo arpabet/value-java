@@ -114,9 +114,17 @@ class SealerTest {
         assertThrows(NullPointerException.class, () -> Sealer.of(null, ALICE));
         assertThrows(NullPointerException.class, () -> Sealer.of(BOB_PUBLIC, null));
         assertThrows(NullPointerException.class, () -> Sealer.publicKey(null));
+    }
 
-        // A key that gives every private key the same shared key is not a key.
-        for (String small : new String[] {
+    /**
+     * Any 32 bytes are taken as a public key, as NaCl and the Go implementation
+     * take them. A few of them are nobody's: every private key agrees with one
+     * of them on the same key, so what is sealed to it anyone opens.
+     */
+    @Test
+    void aPublicKeyIsNotJudged() {
+        final byte[] eve = Sealer.newPrivateKey();
+        for (String nobody : new String[] {
             "0000000000000000000000000000000000000000000000000000000000000000",
             "0100000000000000000000000000000000000000000000000000000000000000",
             "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
@@ -126,10 +134,13 @@ class SealerTest {
             "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
             "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
         }) {
-            final ValueException e = assertThrows(ValueException.class, () -> Sealer.of(Hex.decode(small), ALICE), small);
-            assertTrue(e.getMessage().contains("small order"), e.getMessage());
-            assertThrows(ValueException.class, () -> MESSAGE.seal(Hex.decode(small), ALICE), small);
+            final byte[] sealed = MESSAGE.seal(Hex.decode(nobody), ALICE);
+            assertEquals(MESSAGE, Value.unseal(sealed, Hex.decode(nobody), eve), nobody);
         }
+        // A key that somebody has is another matter.
+        final byte[] sealed = MESSAGE.seal(BOB_PUBLIC, ALICE);
+        assertThrows(ValueException.class, () -> Value.unseal(sealed, BOB_PUBLIC, eve));
+        assertThrows(ValueException.class, () -> Value.unseal(sealed, ALICE_PUBLIC, eve));
     }
 
     static final class Frame {

@@ -90,6 +90,26 @@ var edgePoints = []string{
 	"000000fcffff070000e0ffff3f000000ffffff010000f8ffff1f0000c0ffff7f",
 }
 
+// The encodings of the points of small order: what X25519 gives for one of
+// them is zero whatever the scalar, and a box seals to it all the same, with
+// the key that comes of zero.
+var smallOrder = []string{
+	"0000000000000000000000000000000000000000000000000000000000000000",
+	"0100000000000000000000000000000000000000000000000000000000000000",
+	"e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+	"5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
+	"ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+	"edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+	"eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+	"0000000000000000000000000000000000000000000000000000000000000080",
+	"0100000000000000000000000000000000000000000000000000000000000080",
+	"e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b880",
+	"5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f11d7",
+	"ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+	"edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+	"eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+}
+
 var edgeScalars = []string{
 	"0000000000000000000000000000000000000000000000000000000000000000",
 	"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
@@ -185,6 +205,35 @@ func sealFile(seed int64, scale int) []string {
 	}
 	for i := 0; i < 20*scale; i++ {
 		boxLine(fill(rng.Intn(600)))
+	}
+
+	// A box to a key of small order: Go seals and opens it like any other, and
+	// so does every other private key, since the key agreed on is the same for
+	// all of them.
+	for i, p := range smallOrder {
+		var pub [32]byte
+		copy(pub[:], unhex(p))
+		if _, err := curve25519.X25519(fill(32), pub[:]); err == nil {
+			panic("not a point of small order: " + p)
+		}
+		priv, other := key32(), key32()
+		nonce := nonce24()
+		m := fill(sealLengths[i%len(sealLengths)] + i)
+		sealed := box.Seal(nonce[:], m, nonce, &pub, priv)
+		opened, ok := box.Open(nil, sealed[24:], nonce, &pub, other)
+		if !ok || !bytes.Equal(opened, m) {
+			panic("a box to a point of small order does not open under another key")
+		}
+		lines = append(lines, tsv("smallorder", hx(priv[:]), hx(other[:]), hx(pub[:]), hx(m), hx(sealed)))
+
+		v := randValue(2)
+		packed, _ := val.Pack(v)
+		sealedValue := box.Seal(nonce[:], packed, nonce, &pub, priv)
+		out := "err"
+		if got, err := val.Unseal(sealedValue, &pub, other); err == nil {
+			out = val.Hex(got)
+		}
+		lines = append(lines, tsv("unseal", hx(pub[:]), hx(other[:]), hx(sealedValue), out))
 	}
 
 	// --- Seal and Unseal of values ---

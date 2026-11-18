@@ -10,8 +10,10 @@ import java.util.List;
 import java.util.function.UnaryOperator;
 
 /**
- * A sparse list that changes in place: the immutable list it is at the
- * moment, replaced by the next one at every change.
+ * A sparse list that changes in place. Its state is a {@link SparseList}
+ * that every change replaces by the next; unlike a list of its own, that one
+ * holds the values as they were given, mutable lists and maps included, and
+ * is handed out as an immutable list only when it holds none.
  */
 final class MutableSparseList extends ListValue {
 
@@ -48,7 +50,11 @@ final class MutableSparseList extends ListValue {
 
     @Override
     public ListValue toImmutable() {
-        return now;
+        try {
+            return now.frozen();
+        } catch (StackOverflowError e) {
+            throw cyclic();
+        }
     }
 
     @Override
@@ -68,29 +74,34 @@ final class MutableSparseList extends ListValue {
 
     @Override
     public ListValue append(Value value) {
-        now = (SparseList) now.append(value);
+        now = now.appended(held(this, value));
         return this;
     }
 
     @Override
     public ListValue putAt(int index, Value value) {
-        now = (SparseList) now.putAt(index, value);
+        now = now.put(index, held(this, value));
         return this;
     }
 
     @Override
     public boolean updateAt(int index, UnaryOperator<Value> updater) {
-        final SparseList next = now.updated(index, updater);
-        if (next == null) {
+        int at = now.position(index);
+        if (at < 0) {
             return false;
         }
-        now = next;
+        final Value v = held(this, updater.apply(now.at(at)));
+        at = now.position(index); // the function may have changed the list
+        if (at < 0) {
+            return false;
+        }
+        now = now.replaced(at, v);
         return true;
     }
 
     @Override
     public ListValue insertAt(int index, Value value) {
-        now = (SparseList) now.insertAt(index, value);
+        now = now.inserted(index, new Value[] {held(this, value)});
         return this;
     }
 
@@ -107,7 +118,7 @@ final class MutableSparseList extends ListValue {
 
     @Override
     public ListValue insertAll(int index, Collection<? extends Value> values) {
-        now = (SparseList) now.insertAll(index, values);
+        now = now.inserted(index, heldAll(this, values));
         return this;
     }
 
@@ -119,7 +130,7 @@ final class MutableSparseList extends ListValue {
 
     @Override
     MapValue indexMap() {
-        return now.indexMap();
+        return toImmutable().indexMap();
     }
 
     @Override
@@ -134,11 +145,12 @@ final class MutableSparseList extends ListValue {
 
     @Override
     public boolean equals(Object o) {
-        return o == this || (o instanceof ListValue && now.equals(((ListValue) o).toImmutable()));
+        return o == this || (o instanceof ListValue && toImmutable().equals(((ListValue) o).toImmutable()));
     }
 
     @Override
     public int hashCode() {
-        return now.hashCode();
+        // Not the hash of the state, which the state would keep: what it holds may change.
+        return toImmutable().hashCode();
     }
 }

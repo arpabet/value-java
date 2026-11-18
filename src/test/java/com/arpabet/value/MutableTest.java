@@ -160,19 +160,84 @@ class MutableTest {
         assertEquals("[2]", shrinking.toString());
     }
 
-    // --- what is held never changes ------------------------------------------------
+    // --- what a collection holds ----------------------------------------------------
 
     @Test
-    void whatACollectionHoldsIsImmutable() {
-        final ListValue inner = Value.mutableList().append(v(1));
-        final MapValue outer = Value.mutableMap().put("inner", inner);
-        inner.append(v(2));
-        assertEquals("{\"inner\": [1]}", outer.toString(), "a later change showed in the map it was put into");
-        assertFalse(outer.get("inner").isMutable());
-        assertFalse(outer.getList("inner").isMutable());
+    void aMutableCollectionHoldsWhatIsPutAsItIs() {
+        // Attach, then fill: the list in the map is that list.
+        final MapValue order = Value.mutableMap();
+        final ListValue items = Value.mutableList();
+        order.put("items", items);
+        items.append(v(1));
+        assertEquals("{\"items\": [1]}", order.toString());
+        assertSame(items, order.get("items"));
+        assertSame(items, order.getList("items"));
+        order.getList("items").append(v(2));
+        assertEquals("[1,2]", items.toString());
+        assertEquals(Value.emptyMap().put("items", Value.list(v(1), v(2))), order);
+        assertEquals(Value.emptyMap().put("items", Value.list(v(1), v(2))).hex(), order.hex());
 
-        // The same into immutable collections, and through every way in.
-        final MapValue building = Value.mutableMap().put("k", v(1));
+        // The same in a list, by every way of reading it.
+        final ListValue rows = Value.mutableList();
+        final MapValue row = Value.mutableMap();
+        rows.append(row);
+        row.put("n", v(1));
+        assertEquals("[{\"n\": 1}]", rows.toString());
+        assertSame(row, rows.get(0));
+        assertSame(row, rows.values().get(0));
+        assertSame(row, rows.items().get(0).value());
+        assertSame(row, rows.select(0).get(0));
+        assertSame(row, rows.iterator().next());
+        assertSame(row, rows.getMap(0));
+
+        // And in a sparse list, and through every way in.
+        final ListValue fields = Value.mutableSparseList();
+        fields.putAt(3, row).insertAt(5, row).append(row).insertAll(9, Collections.singletonList(row));
+        row.put("m", v(2));
+        assertSame(row, fields.get(3));
+        assertSame(row, fields.values().get(5));
+        assertSame(row, fields.items().get(2).value());
+        assertSame(row, fields.select(9).get(0));
+        assertEquals("{\"3\": {\"m\": 2,\"n\": 1},\"5\": {\"m\": 2,\"n\": 1},\"6\": {\"m\": 2,\"n\": 1},\"9\": {\"m\": 2,\"n\": 1}}",
+                fields.toString());
+        final ListValue dense = Value.mutableList().putAt(1, row).insertAt(0, row).insertAll(0, Collections.singletonList(row));
+        assertSame(row, dense.get(0));
+        assertSame(row, dense.get(1));
+        assertSame(row, dense.get(3));
+        final MapValue map = Value.mutableMap().insert("a", row).insertAll("b", Arrays.asList(row, null));
+        assertSame(row, map.get("a"));
+        assertSame(row, map.select("b").get(0));
+        assertSame(row, map.values().get(0));
+        assertSame(row, map.entries().get(0).value());
+        assertSame(row, map.toMap().get("a"));
+        assertTrue(map.select("b").get(1).isNull());
+
+        // What update is given is the value held, and what it gives is held as it is.
+        final ListValue replacement = Value.mutableList();
+        assertTrue(order.update("items", old -> {
+            assertSame(items, old);
+            ((ListValue) old).append(v(3));
+            return replacement;
+        }));
+        assertEquals("[1,2,3]", items.toString());
+        assertSame(replacement, order.get("items"));
+        assertTrue(rows.updateAt(0, old -> replacement));
+        assertSame(replacement, rows.get(0));
+        assertTrue(fields.updateAt(3, old -> replacement));
+        assertSame(replacement, fields.get(3));
+
+        // An immutable value in a mutable collection is itself too, and stays what it is.
+        final ListValue fixed = Value.list(v(1));
+        order.put("fixed", fixed);
+        assertSame(fixed, order.get("fixed"));
+        order.getList("fixed").append(v(2));
+        assertEquals("[1]", order.get("fixed").toString());
+    }
+
+    @Test
+    void anImmutableCollectionTakesACopy() {
+        final ListValue inner = Value.mutableList().append(v(1));
+        final MapValue building = Value.mutableMap().put("k", v(1)).put("inner", inner);
         final List<Value> held = new ArrayList<>();
         held.add(Value.list(building, inner).get(0));
         held.add(Value.listOf(Collections.singletonList(building)).get(0));
@@ -190,29 +255,142 @@ class MutableTest {
         held.add(Value.mapOf(Collections.singletonMap("m", building)).get("m"));
         held.add(MapValue.builder().put("m", building).build().get("m"));
         held.add(MapValue.builder().putAll(Value.mutableMap().put("m", building)).build().get("m"));
-        held.add(Value.mutableList().append(building).get(0));
-        held.add(Value.mutableList().putAt(1, building).get(1));
-        held.add(Value.mutableList().append(v(0)).insertAt(0, building).get(0));
-        held.add(Value.mutableList().insertAll(0, Collections.singletonList(building)).get(0));
-        held.add(Value.mutableSparseList().putAt(8, building).get(8));
-        held.add(Value.mutableMap().put("m", building).get("m"));
-        held.add(Value.mutableMap().put("m", v(0)).update("m", old -> building) ? building.toImmutable() : null);
-        final ListValue updated = Value.mutableList().append(v(0));
-        updated.updateAt(0, old -> building);
-        held.add(updated.get(0));
+        // What is made of a mutable collection without being one: a list read as a map, a map as a list.
+        held.add(Value.mutableMap().put("l", Value.mutableList().append(building)).getMap("l").get("0"));
+        held.add(Value.mutableMap().put("s", Value.mutableSparseList().putAt(4, building)).getMap("s").get("4"));
+        held.add(Value.mutableList().append(Value.mutableMap().put("m", building)).getList(0).get(0));
+        held.add(Value.mutableMap().put("m", building).toImmutable().get("m"));
+        held.add(Value.mutableList().append(building).toImmutable().get(0));
+        held.add(Value.mutableSparseList().putAt(4, building).toImmutable().get(4));
+
+        // Whatever happens afterwards, at any depth.
         building.put("k", v(2)).put("later", v(3));
+        inner.append(v(2));
         for (int i = 0; i < held.size(); i++) {
             assertFalse(held.get(i).isMutable(), "way " + i);
-            assertEquals("{\"k\": 1}", held.get(i).toString(), "way " + i);
+            assertEquals("{\"inner\": [1],\"k\": 1}", held.get(i).toString(), "way " + i);
+            assertFalse(((MapValue) held.get(i)).get("inner").isMutable(), "way " + i);
         }
+    }
 
-        // A collection put into itself holds what it was.
-        final ListValue self = Value.mutableList().append(v(1));
-        self.append(self);
-        assertEquals("[1,[1]]", self.toString());
-        final MapValue selfMap = Value.mutableMap().put("a", v(1));
-        selfMap.put("me", selfMap);
-        assertEquals("{\"a\": 1,\"me\": {\"a\": 1}}", selfMap.toString());
+    @Test
+    void anImmutableCopyGoesAllTheWayDown() {
+        final ListValue leaf = Value.mutableList().append(v(1));
+        final MapValue middle = Value.mutableMap().put("leaf", leaf);
+        final ListValue sparse = Value.mutableSparseList().putAt(2, middle);
+        final ListValue top = Value.mutableList().append(sparse).append(Value.utf8("x"));
+
+        final ListValue frozen = top.toImmutable();
+        assertEquals("[{\"2\": {\"leaf\": [1]}},\"x\"]", frozen.toString());
+        assertEquals(top, frozen);
+        assertEquals(frozen, top);
+        assertEquals(frozen.hashCode(), top.hashCode());
+        assertFalse(frozen.isMutable());
+        final ListValue frozenSparse = (ListValue) frozen.get(0);
+        assertFalse(frozenSparse.isMutable());
+        assertTrue(frozenSparse.isSparse());
+        final MapValue frozenMiddle = (MapValue) frozenSparse.get(2);
+        assertFalse(frozenMiddle.isMutable());
+        assertFalse(frozenMiddle.get("leaf").isMutable());
+
+        leaf.append(v(2));
+        middle.put("more", v(3));
+        sparse.putAt(5, v(5));
+        top.append(v(9));
+        assertEquals("[{\"2\": {\"leaf\": [1]}},\"x\"]", frozen.toString());
+        assertEquals("[{\"2\": {\"leaf\": [1,2],\"more\": 3},\"5\": 5},\"x\",9]", top.toString());
+        assertNotEquals(top, frozen);
+        // While something inside can change, a copy is made every time it is asked for.
+        assertNotSame(top.toImmutable(), top.toImmutable());
+        assertEquals(top.toImmutable(), top.toImmutable());
+        // A collection that holds nothing mutable keeps its copy until it changes.
+        assertSame(leaf.toImmutable(), leaf.toImmutable());
+        assertSame(Value.mutableMap().put("a", v(1)).toImmutable().get("a"), v(1));
+    }
+
+    @Test
+    void aMutableCopySharesWhatItHolds() {
+        final ListValue inner = Value.mutableList().append(v(1));
+        final MapValue original = Value.mutableMap().put("inner", inner).put("n", v(1));
+        final MapValue copy = original.toMutable();
+        assertNotSame(original, copy);
+        copy.put("n", v(2)).put("extra", v(3));
+        assertEquals("{\"inner\": [1],\"n\": 1}", original.toString());
+        assertEquals("{\"extra\": 3,\"inner\": [1],\"n\": 2}", copy.toString());
+        // The list is in both.
+        assertSame(inner, copy.get("inner"));
+        inner.append(v(2));
+        assertEquals("{\"inner\": [1,2],\"n\": 1}", original.toString());
+        assertEquals("{\"extra\": 3,\"inner\": [1,2],\"n\": 2}", copy.toString());
+
+        final ListValue list = Value.mutableList().append(inner);
+        final ListValue listCopy = list.toMutable();
+        listCopy.append(v(7));
+        assertEquals(1, list.size());
+        assertSame(inner, listCopy.get(0));
+        final ListValue sparse = Value.mutableSparseList().putAt(1, inner);
+        final ListValue sparseCopy = sparse.toMutable();
+        sparseCopy.putAt(2, v(7));
+        assertEquals(1, sparse.count());
+        assertSame(inner, sparseCopy.get(1));
+
+        // A mutable copy of an immutable collection holds immutable values, as that does.
+        final MapValue thawed = Value.emptyMap().put("inner", inner).toMutable();
+        assertFalse(thawed.get("inner").isMutable());
+    }
+
+    @Test
+    void aCollectionCannotHoldItself() {
+        final ListValue list = Value.mutableList().append(v(1));
+        assertThrows(IllegalArgumentException.class, () -> list.append(list));
+        assertThrows(IllegalArgumentException.class, () -> list.putAt(0, list));
+        assertThrows(IllegalArgumentException.class, () -> list.insertAt(0, list));
+        assertThrows(IllegalArgumentException.class, () -> list.insertAll(0, Collections.singletonList(list)));
+        assertThrows(IllegalArgumentException.class, () -> list.updateAt(0, old -> list));
+        final ListValue sparse = Value.mutableSparseList().putAt(1, v(1));
+        assertThrows(IllegalArgumentException.class, () -> sparse.append(sparse));
+        assertThrows(IllegalArgumentException.class, () -> sparse.putAt(4, sparse));
+        assertThrows(IllegalArgumentException.class, () -> sparse.insertAt(4, sparse));
+        assertThrows(IllegalArgumentException.class, () -> sparse.insertAll(4, Collections.singletonList(sparse)));
+        assertThrows(IllegalArgumentException.class, () -> sparse.updateAt(1, old -> sparse));
+        final MapValue map = Value.mutableMap().put("a", v(1));
+        assertThrows(IllegalArgumentException.class, () -> map.put("me", map));
+        assertThrows(IllegalArgumentException.class, () -> map.insert("me", map));
+        assertThrows(IllegalArgumentException.class, () -> map.insertAll("me", Collections.singletonList(map)));
+        assertThrows(IllegalArgumentException.class, () -> map.update("a", old -> map));
+        assertEquals("[1]", list.toString());
+        assertEquals("{\"1\": 1}", sparse.toString());
+        assertEquals("{\"a\": 1}", map.toString());
+        // An immutable copy of itself it can hold.
+        list.append(list.toImmutable());
+        assertEquals("[1,[1]]", list.toString());
+
+        // Through another collection it is found out when the value is used, and told plainly.
+        final MapValue a = Value.mutableMap();
+        final ListValue b = Value.mutableList();
+        final ListValue c = Value.mutableSparseList();
+        a.put("b", b);
+        b.append(c);
+        c.putAt(3, a);
+        assertThrows(ValueException.class, a::pack);
+        assertThrows(ValueException.class, a::hex);
+        assertThrows(ValueException.class, a::toString);
+        assertThrows(ValueException.class, b::jsonify);
+        assertThrows(ValueException.class, a::toImmutable);
+        assertThrows(ValueException.class, b::toImmutable);
+        assertThrows(ValueException.class, c::toImmutable);
+        assertThrows(ValueException.class, a::hashCode);
+        assertThrows(ValueException.class, () -> a.equals(Value.emptyMap()));
+        assertThrows(ValueException.class, () -> b.equals(Value.emptyList()));
+        assertThrows(ValueException.class, () -> a.toJson(JsonMode.CANONICAL));
+        assertThrows(ValueException.class, () -> a.toJson(JsonMode.RELAXED, Limits.DEFAULT.withMaxDepth(0)));
+        assertThrows(ValueException.class, () -> Value.list(a));
+        assertThrows(ValueException.class, () -> ValueCodec.DEFAULT.marshal(a));
+        assertThrows(ValueException.class, () -> a.seal(Sealer.publicKey(Sealer.newPrivateKey()), Sealer.newPrivateKey()));
+        // Taken apart, it is a value again.
+        c.removeAt(3);
+        assertEquals("{\"b\": [{}]}", a.toString());
+        assertEquals("81a162" + "91" + "80", a.hex());
     }
 
     @Test
@@ -372,8 +550,16 @@ class MutableTest {
         assertEquals(same, marshalled.get("payload"));
         assertFalse(marshalled.get("payload").isMutable());
         assertFalse(marshalled.isMutable());
-        // A value read into a field is immutable.
+        // A value read into a field is immutable, whatever it is read from.
         assertFalse(ValueCodec.DEFAULT.unmarshal(marshalled, Holder.class).payload.isMutable());
+        final MapValue source = Value.mutableMap().put("payload", Value.mutableList().append(v(1)));
+        final Holder read = ValueCodec.DEFAULT.unmarshal(source, Holder.class);
+        source.getList("payload").append(v(2));
+        assertFalse(read.payload.isMutable());
+        assertEquals("[1]", read.payload.toString());
+        final Holder filled = new Holder();
+        ValueCodec.DEFAULT.unmarshalInto(source, filled);
+        assertFalse(filled.payload.isMutable());
         // The value of a mutable collection itself is what it holds now.
         assertFalse(ValueCodec.DEFAULT.marshal(message).isMutable());
         assertEquals("mallory", ((MapValue) ValueCodec.DEFAULT.marshal(message)).getString("to").utf8());

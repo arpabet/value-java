@@ -20,8 +20,8 @@ in the other, and an object signed on one side verifies on the other.
   box in pure Java, so a protocol encrypts its messages without a crypto
   library ([Sealing](#sealing)).
 * **Immutable by default.** A value is immutable and safe to share between
-  threads; lists and maps that change in place are there for building, as in
-  Go ([Building in place](#building-in-place)).
+  threads; as in Go there are mutable lists and maps as well
+  ([Mutable lists and maps](#mutable-lists-and-maps)).
 
 It implements version 1.6.1 of the format.
 
@@ -141,38 +141,52 @@ bytes: 40 bytes more than what they seal, whose length they do not hide.
 Opening proves the bytes were sealed with one of the two private keys and not
 altered; it is not a signature, since either party could have sealed them.
 Keys are 32 bytes: Go's `box.GenerateKey` and `Sealer.newPrivateKey` /
-`Sealer.publicKey` make the same kind.
+`Sealer.publicKey` make the same kind. Any 32 bytes are taken as a public key,
+here as in Go: sealing protects a message from everyone but the holder of
+that key, so what matters is knowing whose key it is.
 
-### Building in place
+### Mutable lists and maps
 
-`put`, `append` and the like return another value and leave the one they were
-called on as it is. Building a large list that way copies it at every step,
-so, as in Go, there are lists and maps that change in place: the same methods
-change the collection itself and return it.
+A list or a map is made either immutable or mutable, as in Go, and stays what
+it was made.
+
+**Immutable** is what `Value.list`, `Value.emptyMap()`, `MapValue.builder()`
+give, and what everything read from bytes, JSON or sealed bytes is. It never
+changes: `put` and `append` return another value and leave it as it is.
 
 ```java
-ListValue rows = Value.mutableList();
-for (Row row : result) {
-    rows.append(encode(row));                       // no copy of what is already there
-}
-
-MapValue event = Value.mutableMap().put("op", Value.utf8("put"));
-if (region != null) {
-    event.put("region", Value.utf8(region));        // or event = event.put(...), as with any map
-}
-event.update("seq", old -> ((NumberValue) old).add(Value.ofLong(1)));   // false: there is no "seq"
+MapValue a = Value.emptyMap();
+MapValue b = a.put("k", Value.ofLong(1));       // a is still empty; b is another map
 ```
 
-A mutable collection is a value like any other: it packs, seals, prints and
-compares by what it holds at the moment. Three things keep the rest of the
-library's promises:
+**Mutable** is what `Value.mutableList()`, `Value.mutableSparseList()` and
+`Value.mutableMap()` give. It is an ordinary mutable object, as an `ArrayList`
+or a `TreeMap` is: the same methods change the object itself (and return it,
+so that calls chain), and appending does not copy what is already there.
 
-* **What a list or a map holds is immutable.** Putting a mutable collection
-  into another one puts what it is at that moment (`toImmutable()`); later
-  changes to it do not show there. Build the inner one first.
-* **Nothing read is mutable**: not from bytes, JSON, sealed bytes or a codec.
-* A mutable collection is not safe to share between threads while it changes;
-  `toImmutable()` gives one that is.
+```java
+MapValue event = Value.mutableMap();
+event.put("op", Value.utf8("put"));             // event itself has the entry now
+
+ListValue keys = Value.mutableList();
+event.put("keys", keys);                        // the map holds this very list
+keys.append(Value.utf8("k1"));                  // so this shows in event: {"keys": ["k1"],"op": "put"}
+
+event.update("op", old -> Value.utf8(old + "!"));   // replaces a value in place; false if there is no "op"
+byte[] wire = event.pack();                     // a mutable value packs, seals and compares like any other
+```
+
+Two rules connect the two kinds:
+
+* **An immutable list or map never holds a mutable one.** Given one, it takes
+  an immutable copy of it as it is at that moment, so nothing immutable ever
+  changes, at any depth. A mutable one holds whatever it is given as it is.
+* **`toImmutable()` and `toMutable()` cross over.** `toImmutable()` copies a
+  mutable list or map, and the mutable ones inside it, into an immutable
+  value; `toMutable()` gives a new mutable list or map of the same elements.
+
+A mutable list or map must not be changed by one thread while another uses it,
+and must not be put into itself. An immutable value is safe to share.
 
 | Go | Java |
 |---|---|
@@ -354,13 +368,17 @@ over `writeTo`, is what Go's `ReadStream` and `WriteStream` are over channels.
 Before v1.5.0 of the Go implementation a big integer travelled as Go's gob
 encoding and a decimal as shopspring's `MarshalBinary`. Those layouts cannot
 be told from the portable ones by looking at the bytes, so a decoder never
-guesses: it reads them when the limits say so. This is Go's
-`LegacyBigNumbers`, here a property of the call instead of the process.
+guesses: it reads them while a switch is on. The switch is Go's
+`LegacyBigNumbers`, and like it one for the whole process:
 
 ```java
-Limits old = Limits.DEFAULT.withLegacyBigNumbers(true);
-byte[] migrated = Value.unpack(stored, old).pack();     // packing always writes the portable layout
+Value.setLegacyBigNumbers(true);                 // Go: value.LegacyBigNumbers = true
+byte[] migrated = Value.unpack(stored).pack();   // packing always writes the portable layout
+Value.setLegacyBigNumbers(false);
 ```
+
+`Value.unpackLegacyBigInt` and `Value.unpackLegacyDecimal` read one such
+payload whatever the switch says, as Go's functions of those names do.
 
 ## Android
 
@@ -394,7 +412,8 @@ What is checked, by `./gradlew build`:
   structs on this side.
 * **Sealing**, against `golang.org/x/crypto`: X25519 (with the points of small
   order and the encodings above the modulus), HSalsa20, Poly1305, and boxes of
-  every length around a block. Go's `Seal` draws a nonce and nothing else, so
+  every length around a block, also to the public keys that are nobody's. Go's
+  `Seal` draws a nonce and nothing else, so
   with the nonce given the bytes sealed here must be, and are, the very bytes
   Go sealed and its `Unseal` opened; and what `Unseal` says to altered, cut
   and foreign bytes is what `unseal` says. The field arithmetic is also
@@ -410,15 +429,12 @@ cd conformance && go run . -out /tmp/golden -scale 80 -seed 7 && cd ..
 
 Where the two differ, on purpose:
 
-* **A mutable list or map changes in place and nothing else does.** Go's may
-  share storage with the one it was derived from, so that the older one is to
-  be left alone; here the method changes the collection and returns it, there
-  is no older one, and nothing is shared. What a collection holds is
-  immutable: a mutable one put into another is put as it is at that moment,
-  where in Go the two would go on sharing the entries.
-* **A public key of small order is refused.** There are a dozen 32-byte
-  strings that give every private key the same shared key, which is then no
-  secret; Go's box seals with it, `Sealer.of` throws. No honest key is one.
+* **A mutable list or map is one object.** In Go `m.Put(k, v)` returns a map
+  that may share storage with `m`, and `m` is to be left alone from then on;
+  here it changes `m` and returns `m`. So `m = m.Put(k, v)` reads the same in
+  both, and a mutable list put into a mutable map and appended to afterwards
+  shows there, where in Go the map would keep the list as it was. An
+  immutable list or map takes a copy of a mutable one, which Go's does not.
 * **`equals` is equality of canonical bytes for every pair of values.** Text
   and binary over the same bytes are different, and so are a dense and a
   sparse list with the same elements, where Go's `Equal` is looser (and not
@@ -440,12 +456,13 @@ Where the two differ, on purpose:
   integer key of 2^31 or more is a map key.
 * **A double outside the range of a long** converts to the nearest long;
   Go leaves that to the platform.
-* **`LegacyBigNumbers` is a property of the limits** passed to a decoder, not
-  a global switch, and a codec for another dialect is told which annotation
-  names a field instead of reading a `json` or `msgpack` tag.
-* **The formatting knobs** (`Base64Prefix`, `DecimalExpDelim`,
-  `UnknownPrefix`, `FirstIndexKey`, `AllowFastAppends`) are not variables:
-  the texts are the ones Go writes by default.
+* **A codec for another dialect** is told which annotation names a field
+  instead of reading a `json` or `msgpack` tag.
+* **The decoding limits** are an object passed to a call (`Limits`), where Go
+  has the variables `MaxParseDepth` and the like.
+* **The variables that shape Go's text** are constants here, with the values
+  Go has by default: `Base64Prefix` is `StringValue.BASE64_PREFIX` and
+  `UnknownPrefix` is `ExtensionValue.UNKNOWN_PREFIX`.
 
 ## Building
 

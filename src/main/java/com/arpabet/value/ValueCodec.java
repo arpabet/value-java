@@ -611,7 +611,7 @@ public final class ValueCodec {
             throw mismatch(v, target.getClass());
         }
         try {
-            fill((MapValue) v, target, info(target.getClass()));
+            fill((MapValue) v.toImmutable(), target, info(target.getClass()));
         } catch (StackOverflowError e) {
             throw new ValueException("value is nested too deeply for the stack");
         }
@@ -622,7 +622,8 @@ public final class ValueCodec {
             throw new NullPointerException();
         }
         try {
-            return decode(v, type, unsigned);
+            // What an object is given to keep does not change after.
+            return decode(v.toImmutable(), type, unsigned);
         } catch (StackOverflowError e) {
             throw new ValueException("value is nested too deeply for the stack");
         }

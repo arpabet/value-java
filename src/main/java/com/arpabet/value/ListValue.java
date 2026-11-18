@@ -19,26 +19,40 @@ import java.util.function.UnaryOperator;
  * it may hold several values under one index, which is how a repeated field of
  * a numeric schema travels. The two never encode alike and are never equal.
  *
- * <p>A list is immutable: the methods that change it return another list,
- * and the list is safe to share. Building one that way copies it at every
- * step, so there is a <em>mutable</em> list as well ({@link Value#mutableList()},
- * {@link Value#mutableSparseList()}, {@link #toMutable()}), on which the same
- * methods change the list itself and return it:
+ * <h2>Immutable and mutable lists</h2>
+ *
+ * A list is one or the other from the moment it is made, and
+ * {@link #isMutable()} tells which.
+ *
+ * <p>An <em>immutable</em> list ({@link Value#list}, {@link Value#emptyList()},
+ * and every list read from bytes or text) never changes: {@code append} and
+ * the like leave it as it is and return another list. It is safe to share
+ * between threads.
+ *
+ * <p>A <em>mutable</em> list ({@link Value#mutableList()},
+ * {@link Value#mutableSparseList()}, {@link #toMutable()}) is an ordinary
+ * mutable object, as an {@code ArrayList} is: the same methods change the
+ * list itself, and return it so that calls can be chained. Appending does not
+ * copy what is already there.
  *
  * <pre>{@code
  * ListValue rows = Value.mutableList();
  * for (Row row : result) {
- *     rows.append(encode(row));          // or rows = rows.append(...), as with any list
+ *     rows.append(encode(row));          // rows itself grows
  * }
+ * rows.updateAt(0, first -> Value.utf8("header"));
  * }</pre>
  *
- * <p>A mutable list is a value like any other: it packs, prints and compares
- * by what it holds at the moment, and equals the immutable list of the same
- * values. It is not safe to share between threads while it changes. What a
- * list holds is always immutable: putting a mutable list or map into another
- * list or map puts {@linkplain #toImmutable() what it is at that moment},
- * and later changes to it do not show there. A list read from bytes or text
- * is never mutable.
+ * <p>A mutable list holds what is put into it as it is: a mutable list or map
+ * inside it is that same object, and changing it later shows in the list.
+ * An immutable list cannot hold something that changes, so it takes a mutable
+ * list or map as an immutable copy of what it is at that moment.
+ *
+ * <p>A mutable list is a value like any other: it packs, seals, prints and
+ * compares by what it holds when asked, and equals the immutable list of the
+ * same values. {@link #toImmutable()} gives an immutable copy, all the way
+ * down. A mutable list must not be changed by one thread while another uses
+ * it, and must not come to hold itself.
  */
 public abstract sealed class ListValue extends Value implements Iterable<Value>
         permits DenseList, SparseList, MutableDenseList, MutableSparseList {
@@ -100,12 +114,17 @@ public abstract sealed class ListValue extends Value implements Iterable<Value>
 
     /**
      * The list itself when it is immutable; otherwise an immutable list of
-     * what this one holds now.
+     * what this one holds now, with every mutable list or map inside it
+     * copied the same way.
      */
     @Override
     public abstract ListValue toImmutable();
 
-    /** A new mutable list of what this one holds, dense or sparse as it is. */
+    /**
+     * A new mutable list of the values this one holds, dense or sparse as it
+     * is. The values are not copied: a mutable list or map among them is in
+     * both lists.
+     */
     public abstract ListValue toMutable();
 
     /**
@@ -163,8 +182,9 @@ public abstract sealed class ListValue extends Value implements Iterable<Value>
     }
 
     /**
-     * A value as a list or a map holds it: the null value for null, and what
-     * a mutable list or map is at the moment, so that nothing held changes.
+     * A value as an immutable list or map holds it: the null value for null,
+     * and an immutable copy of a mutable list or map, so that nothing an
+     * immutable value holds ever changes.
      */
     static Value element(Value v) {
         return v == null ? NullValue.NULL : v.toImmutable();
@@ -176,6 +196,30 @@ public abstract sealed class ListValue extends Value implements Iterable<Value>
             out[i] = element(out[i]);
         }
         return out;
+    }
+
+    /**
+     * A value as a mutable list or map holds it: the null value for null, and
+     * any other value itself, a mutable one included.
+     */
+    static Value held(Value owner, Value v) {
+        if (v == owner) {
+            throw new IllegalArgumentException("a list or a map cannot hold itself");
+        }
+        return v == null ? NullValue.NULL : v;
+    }
+
+    static Value[] heldAll(Value owner, Collection<? extends Value> values) {
+        final Value[] out = values.toArray(new Value[0]);
+        for (int i = 0; i < out.length; i++) {
+            out[i] = held(owner, out[i]);
+        }
+        return out;
+    }
+
+    /** What is thrown where a mutable list or map is found to hold itself through others. */
+    static ValueException cyclic() {
+        return new ValueException("a mutable list or map holds itself");
     }
 
     /** A value of a list and its index. */

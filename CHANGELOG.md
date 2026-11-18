@@ -15,12 +15,13 @@ compatible with it.
 - **The value model**: `Value` and its kinds (`NullValue`, `BoolValue`,
   `NumberValue`, `StringValue`, `TimestampValue`, `ListValue`, `MapValue`,
   `ExtensionValue`), immutable, with equality by canonical bytes.
-- **Lists and maps that change in place** (Go's mutable collections):
+- **Mutable lists and maps** (Go's mutable collections):
   `Value.mutableList`, `Value.mutableSparseList`, `Value.mutableMap`,
   `toMutable`, `toImmutable`, `isMutable`, and `update` / `updateAt` (Go's
-  `Update`). The methods that return another collection change a mutable one
-  and return it. What a collection holds stays immutable, and nothing read
-  from bytes or text is mutable.
+  `Update`). They are ordinary mutable objects: the methods that return
+  another collection change a mutable one and return it, and it holds what it
+  is given as it is. An immutable list or map takes an immutable copy of a
+  mutable one, and nothing read from bytes or text is mutable.
 - **Sealing**: `Value.seal`, `Value.unseal` and `Sealer` (Go's `Seal` and
   `Unseal`): NaCl box, that is X25519, XSalsa20 and Poly1305, in pure Java
   with no dependency, interoperable with the Go implementation in both
@@ -39,9 +40,11 @@ compatible with it.
   for other types. `ValueCodec.named` names fields by the annotation of
   another library, as Go's `JSONValueCodec` and `MsgpackValueCodec` do by
   `json` and `msgpack` tags.
-- **`Limits.withLegacyBigNumbers`** (Go's `LegacyBigNumbers`): reading big
-  integers and decimals in the layouts the Go implementation wrote before its
-  v1.5.0, for migrating stored bytes.
+- **`Value.setLegacyBigNumbers`** (Go's `LegacyBigNumbers`, a switch for the
+  process as there), `Value.unpackLegacyBigInt` and
+  `Value.unpackLegacyDecimal`: reading big integers and decimals in the
+  layouts the Go implementation wrote before its v1.5.0, for migrating stored
+  bytes.
 - **`StructCodec`**: the numeric schema of `@Tag` and `@Repeated` (Go's
   `PackStruct` and `UnpackStruct`).
 - **Conformance**: the vectors of the format, a golden corpus written by the

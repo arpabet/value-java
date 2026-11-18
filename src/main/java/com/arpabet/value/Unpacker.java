@@ -437,7 +437,7 @@ public final class Unpacker {
     static Value extension(int type, byte[] data, Limits limits) {
         switch (type) {
             case ExtensionValue.BIGINT:
-                if (limits.legacyBigNumbers()) {
+                if (Value.legacyBigNumbers()) {
                     return new BigIntNumber(legacyBigInt(data, 0));
                 }
                 if (data.length == 0) {
@@ -445,7 +445,7 @@ public final class Unpacker {
                 }
                 return new BigIntNumber(new BigInteger(data));
             case ExtensionValue.DECIMAL: {
-                if (limits.legacyBigNumbers()) {
+                if (Value.legacyBigNumbers()) {
                     return new DecimalNumber(legacyDecimal(data, limits));
                 }
                 if (data.length < 5) {
@@ -467,7 +467,7 @@ public final class Unpacker {
      * v1.5.0: a byte holding the version of the encoding, which is 1, above
      * the sign, then the magnitude. No bytes at all is zero.
      */
-    private static BigInteger legacyBigInt(byte[] data, int from) {
+    static BigInteger legacyBigInt(byte[] data, int from) {
         if (data.length == from) {
             return BigInteger.ZERO;
         }
@@ -480,7 +480,7 @@ public final class Unpacker {
     }
 
     /** A decimal as it travelled before v1.5.0: a 4-byte exponent, then the coefficient as above. */
-    private static BigDecimal legacyDecimal(byte[] data, Limits limits) {
+    static BigDecimal legacyDecimal(byte[] data, Limits limits) {
         if (data.length < 4) {
             throw new ValueException("legacy decimal payload of " + data.length + " bytes, want at least 4");
         }

@@ -46,6 +46,13 @@ import java.util.Arrays;
  * <p>Keys are 32 bytes. A private key is any 32 random bytes, and the public
  * key is derived from it; keep the private key and give the public key out. A
  * sealer is immutable and safe to share between threads.
+ *
+ * <p>Any 32 bytes are taken as a public key, as NaCl and the Go implementation
+ * take them. A few of them are nobody's key: with 32 zero bytes, for one, the
+ * two sides agree on the same key whatever the private key is, so what is
+ * sealed to it anyone can open. No key derived from a private key is one of
+ * these, and a sealer does not look for them. What protects a message is
+ * knowing whose public key it is sealed to, as with any public key.
  */
 public final class Sealer {
 
@@ -91,22 +98,16 @@ public final class Sealer {
     /**
      * The sealer between a peer's public key and one's own private key.
      *
-     * @throws ValueException when a key is not 32 bytes, or the public key is
-     *         one of the few that give every private key the same shared key
-     *         (a point of small order), which no honest peer has
+     * @throws ValueException when a key is not 32 bytes
      */
     public static Sealer of(byte[] publicKey, byte[] privateKey) {
         check(publicKey, "public key");
         check(privateKey, "private key");
         final byte[] shared = new byte[KEY_LENGTH];
-        final boolean ok = Curve25519.scalarMult(shared, privateKey, publicKey);
+        Curve25519.scalarMult(shared, privateKey, publicKey);
         final byte[] key = new byte[KEY_LENGTH];
         Salsa20.hsalsa20(key, shared, new byte[16], 0);
         Arrays.fill(shared, (byte) 0);
-        if (!ok) {
-            Arrays.fill(key, (byte) 0);
-            throw new ValueException("public key is a point of small order");
-        }
         return new Sealer(key);
     }
 

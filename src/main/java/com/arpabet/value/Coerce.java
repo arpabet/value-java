@@ -87,9 +87,9 @@ final class Coerce {
 
     /** Text that starts with {@code base64,} and is unpadded base64 after it is binary; any other is text. */
     static StringValue parseString(String s) {
-        if (s.startsWith(RawString.BASE64_PREFIX)) {
+        if (s.startsWith(StringValue.BASE64_PREFIX)) {
             try {
-                return new RawString(Base64.decodeRawStd(s.substring(RawString.BASE64_PREFIX.length())));
+                return new RawString(Base64.decodeRawStd(s.substring(StringValue.BASE64_PREFIX.length())));
             } catch (ValueException e) {
                 // not base64: it is the text it looks like
             }
