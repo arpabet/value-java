@@ -134,13 +134,32 @@ final class MutableSparseList extends ListValue {
     }
 
     @Override
+    void open(Walk.Level level) {
+        now.open(level);
+    }
+
+    @Override
     void pack(Packer p) {
+        if (!p.enter()) {
+            Walk.pack(this, p);
+            return;
+        }
+        p.leave();
         now.pack(p);
     }
 
     @Override
     void jsonify(StringBuilder out) {
-        now.jsonify(out);
+        jsonify(out, 0);
+    }
+
+    @Override
+    void jsonify(StringBuilder out, int depth) {
+        if (depth >= Walk.deep) {
+            Walk.jsonify(this, out);
+        } else {
+            now.jsonify(out, depth);
+        }
     }
 
     @Override

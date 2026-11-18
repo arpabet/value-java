@@ -12,7 +12,7 @@ in the other, and an object signed on one side verifies on the other.
   library passes its conformance vectors unchanged and is checked against the
   Go implementation itself on a corpus of values, bytes and texts
   ([Compatibility](#compatibility-with-the-go-implementation)).
-* **Light.** Pure Java, no dependencies, about 150 KB.
+* **Light.** Pure Java, no dependencies, about 165 KB.
 * **Java 17 bytecode, Android API 24+.** It calls nothing above API 24 (the
   build enforces it), ships its R8 rules, and does not need core library
   desugaring.
@@ -77,7 +77,9 @@ back.equals(payment);                   // true
 The four number types are distinct values with distinct encodings: the long 1,
 the double 1.0, the big integer 1 and the decimal 1 are never equal, and 1.0
 and 1.00 are different decimals. **Two values are `equals` exactly when their
-canonical bytes are equal.**
+canonical bytes are equal**, with one exception that comes with the format:
+a sparse list with nothing in it has the bytes of the empty map (`80`), is
+read back as one, and is not equal to it.
 
 ### Order does not matter
 
@@ -349,8 +351,13 @@ and sign the MessagePack bytes.
 Decoding is bounded by `Limits`, with the defaults of the Go implementation:
 depth 1000, 16,777,216 elements per list or map, 1 GiB per string, binary or
 extension, decimal exponent 1,048,576. A header that claims a length the input
-does not deliver allocates nothing, and the decoder does not recurse, so how
-deep a value may nest does not depend on the thread's stack.
+does not deliver allocates nothing.
+
+Nothing done with a value depends on the thread's stack. Decoding, packing,
+JSON in both directions, printing, comparing and hashing keep the lists and
+maps they have open on the heap once a value nests more than a few levels, so
+a value of the full default depth, or of any depth without a limit, works on
+the small stack of an Android background thread as it does on a server's.
 
 ```java
 Limits tight = Limits.DEFAULT.withMaxDepth(32).withMaxByteLength(1 << 20);
@@ -499,6 +506,15 @@ Where the two differ, on purpose:
 ./gradlew build                  # compile, test, check the Android API level
 ./gradlew publishToMavenLocal    # com.arpabet:value:0.1.0
 ```
+
+Two workflows run on GitHub. `build.yaml` builds and tests every push on JDK
+17 and 21, checks that the committed corpus is what the generator writes, and
+runs the tests against a larger one written on the spot. `release.yaml`
+publishes to Maven Central: push the tag `v` + the `version` of
+`build.gradle.kts`, or run it by hand to stage a release in the Central
+Portal without publishing it. What it needs set up once (the Portal account,
+its token and a signing key, as repository secrets) is listed at its top. The
+jars are reproducible: the same sources give the same bytes.
 
 JDK 17 or newer. To regenerate the golden corpus after a change of the Go
 implementation: `cd conformance && go run .`

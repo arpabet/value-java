@@ -101,6 +101,26 @@ class GoldenTest {
 
     @Test
     void unpack() throws IOException {
+        unpackAndCheck();
+    }
+
+    /**
+     * The same with every list and map packed, printed, compared and hashed
+     * without recursion, the way only those more than {@link Walk#deep} levels
+     * down otherwise are.
+     */
+    @Test
+    void unpackAndTheRestWithoutRecursion() throws IOException {
+        final int deep = Walk.deep;
+        Walk.deep = 0;
+        try {
+            unpackAndCheck();
+        } finally {
+            Walk.deep = deep;
+        }
+    }
+
+    private static void unpackAndCheck() throws IOException {
         final Report r = new Report("unpack.tsv");
         for (String[] f : load("unpack.tsv")) {
             r.lines++;

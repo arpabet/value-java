@@ -17,6 +17,8 @@ final class Packer {
 
     private byte[] buf;
     private int pos;
+    /** How many lists and maps are being packed by recursion at the moment. */
+    private int depth;
 
     Packer() {
         this(64);
@@ -28,6 +30,24 @@ final class Packer {
 
     byte[] toByteArray() {
         return Arrays.copyOf(buf, pos);
+    }
+
+    /**
+     * Asks to pack a list or a map by recursion, which is granted for the
+     * first levels of a value; the one that is refused packs itself and what
+     * it holds without recursion ({@link Walk#pack}), so that the depth of a
+     * value is no matter of the thread's stack.
+     */
+    boolean enter() {
+        if (depth >= Walk.deep) {
+            return false;
+        }
+        depth++;
+        return true;
+    }
+
+    void leave() {
+        depth--;
     }
 
     private void ensure(int n) {

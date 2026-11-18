@@ -29,8 +29,11 @@ compatible with it.
   seals bytes that are not a value in the same form.
 - **Canonical MessagePack**: `Value.pack`, `Value.unpack`, `Value.read`,
   `Value.writeTo`, `Unpacker`, and the decoding `Limits` of the Go
-  implementation. The decoder reads every MessagePack form and does not
-  recurse.
+  implementation. The decoder reads every MessagePack form.
+- **No dependence on the thread's stack**: decoding, packing, JSON in both
+  directions, printing, comparing and hashing do not recurse with the depth
+  of a value, so the thousand levels a decoder accepts by default work on a
+  stack of any size.
 - **Lossless JSON**: `Value.toJson` in the canonical and relaxed modes and
   `Value.parseJson`; `toString` and `jsonify` render as Go's `String()` and
   `Jsonify` do.
@@ -57,3 +60,5 @@ compatible with it.
   generator that writes it (`conformance/`).
 - Java 17 bytecode with no dependencies; Android API 24 and up, checked by the
   build, with R8 rules in the jar.
+- **Release to Maven Central** by a workflow (`release.yaml`): signed,
+  reproducible jars, uploaded to the Central Portal on a version tag.

@@ -469,18 +469,40 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
         return self().vals[i];
     }
 
+    /** Tells where the keys and the values are, to go through them without recursion. */
+    void open(Walk.Level level) {
+        final MapValue m = self();
+        level.keys = m.keys;
+        level.vals = m.vals;
+        level.count = m.keys.length;
+    }
+
     @Override
     void pack(Packer p) {
+        if (!p.enter()) {
+            Walk.pack(this, p);
+            return;
+        }
         final MapValue m = self();
         p.mapHeader(m.keys.length);
         for (int i = 0; i < m.keys.length; i++) {
             p.str(m.keys[i]);
             m.vals[i].pack(p);
         }
+        p.leave();
     }
 
     @Override
     void jsonify(StringBuilder out) {
+        jsonify(out, 0);
+    }
+
+    @Override
+    void jsonify(StringBuilder out, int depth) {
+        if (depth >= Walk.deep) {
+            Walk.jsonify(this, out);
+            return;
+        }
         final MapValue m = self();
         out.append('{');
         for (int i = 0; i < m.keys.length; i++) {
@@ -489,7 +511,7 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
             }
             // The key is written as it is, without escapes, as Go writes it.
             out.append('"').append(m.keys[i]).append("\": ");
-            m.vals[i].jsonify(out);
+            m.vals[i].jsonify(out, depth + 1);
         }
         out.append('}');
     }
@@ -507,21 +529,56 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
         if (!(o instanceof MapValue)) {
             return false;
         }
-        final MapValue a = toImmutable();
-        final MapValue b = ((MapValue) o).toImmutable();
-        return a == b || (Arrays.equals(a.keys, b.keys) && Arrays.equals(a.vals, b.vals));
+        return same((MapValue) o, 0);
     }
 
     @Override
+    boolean same(Value o, int depth) {
+        if (o == this) {
+            return true;
+        }
+        if (!(o instanceof MapValue)) {
+            return false;
+        }
+        final MapValue a = toImmutable();
+        final MapValue b = ((MapValue) o).toImmutable();
+        if (a == b) {
+            return true;
+        }
+        if (!Arrays.equals(a.keys, b.keys)) {
+            return false;
+        }
+        return depth >= Walk.deep ? Walk.equal(a, b) : Walk.sameValues(a.vals, b.vals, depth);
+    }
+
+    /** What {@code Arrays.hashCode} gives for the keys, times 31, plus what it gives for the values. */
+    @Override
     public int hashCode() {
+        return hash(0);
+    }
+
+    @Override
+    int hash(int depth) {
         // Of a mutable map, the hash of an immutable copy: its state may hold what changes.
         final MapValue m = toImmutable();
         int h = m.hash;
         if (h == 0) {
-            h = Arrays.hashCode(m.keys) * 31 + Arrays.hashCode(m.vals);
+            if (depth >= Walk.deep) {
+                return Walk.hash(m);
+            }
+            h = Arrays.hashCode(m.keys) * 31 + Walk.hashValues(m.vals, depth);
             m.hash = h;
         }
         return h;
+    }
+
+    /** The hash an immutable map has kept, or 0 when it has none yet. */
+    int knownHash() {
+        return hash;
+    }
+
+    void keepHash(int h) {
+        hash = h;
     }
 
     /** A key of a map and its value. */

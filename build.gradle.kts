@@ -1,6 +1,7 @@
 plugins {
     `java-library`
     `maven-publish`
+    signing
     id("ru.vyarus.animalsniffer") version "2.0.1"
 }
 
@@ -64,6 +65,13 @@ tasks.test {
     }
 }
 
+// The same sources give the same jars, byte for byte, whenever and wherever
+// they are built: a release can be checked against its tag.
+tasks.withType<AbstractArchiveTask>().configureEach {
+    isPreserveFileTimestamps = false
+    isReproducibleFileOrder = true
+}
+
 tasks.jar {
     manifest {
         attributes(
@@ -88,7 +96,68 @@ publishing {
                         url.set("https://www.apache.org/licenses/LICENSE-2.0")
                     }
                 }
+                developers {
+                    developer {
+                        name.set("Karagatan LLC")
+                        organization.set("Karagatan LLC")
+                        organizationUrl.set("https://github.com/arpabet")
+                    }
+                }
+                scm {
+                    connection.set("scm:git:https://github.com/arpabet/value-java.git")
+                    developerConnection.set("scm:git:ssh://git@github.com/arpabet/value-java.git")
+                    url.set("https://github.com/arpabet/value-java")
+                }
             }
+        }
+    }
+    repositories {
+        // Where a release is laid out before it goes to Maven Central: a Maven
+        // repository in the build directory, which `centralBundle` zips.
+        maven {
+            name = "staging"
+            url = uri(layout.buildDirectory.dir("staging"))
+        }
+    }
+}
+
+// A release is signed with the key the release workflow passes in
+// (ORG_GRADLE_PROJECT_signingKey, an ASCII-armored private key, and
+// ORG_GRADLE_PROJECT_signingPassword). Without a key, as on a developer's
+// machine, nothing is signed and `publishToMavenLocal` works as it is.
+signing {
+    val key = providers.gradleProperty("signingKey").orNull
+    if (!key.isNullOrBlank()) {
+        useInMemoryPgpKeys(key, providers.gradleProperty("signingPassword").orNull)
+        sign(publishing.publications["maven"])
+    }
+}
+
+val cleanStaging by tasks.registering(Delete::class) {
+    delete(layout.buildDirectory.dir("staging"))
+}
+
+tasks.named("publishMavenPublicationToStagingRepository") {
+    dependsOn(cleanStaging)
+}
+
+// The bundle the Central Portal takes (central.sonatype.org/publish/publish-portal-upload):
+// the files of the release in the layout of a Maven repository, each with its
+// signature and its checksums. Maven Central writes the maven-metadata.xml
+// itself, and a signature needs no checksum.
+tasks.register<Zip>("centralBundle") {
+    group = "publishing"
+    description = "Zips the signed release for upload to the Central Portal."
+    dependsOn("publishMavenPublicationToStagingRepository")
+    from(layout.buildDirectory.dir("staging"))
+    exclude("**/maven-metadata.xml*")
+    exclude("**/*.asc.md5", "**/*.asc.sha1", "**/*.asc.sha256", "**/*.asc.sha512")
+    destinationDirectory.set(layout.buildDirectory.dir("central"))
+    archiveFileName.set("${project.name}-${project.version}-bundle.zip")
+    doFirst {
+        val staged = layout.buildDirectory.dir("staging").get().asFileTree.files
+        check(staged.any { it.name.endsWith(".jar.asc") }) {
+            "the release is not signed: pass -PsigningKey and -PsigningPassword"
         }
     }
 }

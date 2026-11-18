@@ -176,6 +176,9 @@ public abstract sealed class ListValue extends Value implements Iterable<Value>
     /** The items as a map keyed by the decimal text of their index. */
     abstract MapValue indexMap();
 
+    /** Tells where the values are, and the indexes of a sparse list, to go through them without recursion. */
+    abstract void open(Walk.Level level);
+
     @Override
     public final String toString() {
         return jsonify();

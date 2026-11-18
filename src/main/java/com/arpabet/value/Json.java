@@ -8,6 +8,7 @@ package com.arpabet.value;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -68,16 +69,144 @@ final class Json {
             throw new NullPointerException("mode");
         }
         final StringBuilder out = new StringBuilder();
-        try {
-            append(out, v, mode, limits, 0);
-        } catch (StackOverflowError e) {
-            throw new ValueException("value is nested too deeply for the stack");
-        }
+        append(out, v, mode, limits, 0, 0);
         return out.toString();
     }
 
-    private static void append(StringBuilder out, Value v, JsonMode mode, Limits limits, int depth) {
-        limits.checkDepth(depth);
+    /**
+     * Writes a value at a depth, which is what the limit counts, by recursion
+     * for the first levels of a value; a list or a map further down is
+     * written without ({@link #deep}), so that the depth a value may have is
+     * a matter of the limit and not of the stack the caller happens to run on.
+     */
+    private static void append(StringBuilder out, Value v, JsonMode mode, Limits limits, int depth, int level) {
+        if (v instanceof ListValue) {
+            if (level >= Walk.deep) {
+                deep(out, v, mode, limits, depth);
+                return;
+            }
+            limits.checkDepth(depth);
+            final ListValue list = (ListValue) v;
+            if (list.isSparse()) {
+                out.append("{\"").append(SPARSE).append("\":{");
+                final List<ListValue.Item> items = list.items();
+                for (int i = 0; i < items.size(); i++) {
+                    if (i > 0) {
+                        out.append(',');
+                    }
+                    final ListValue.Item item = items.get(i);
+                    out.append('"').append(item.key()).append("\":");
+                    append(out, item.value(), mode, limits, depth + 1, level + 1);
+                }
+                out.append("}}");
+                return;
+            }
+            out.append('[');
+            final List<Value> values = list.values();
+            for (int i = 0; i < values.size(); i++) {
+                if (i > 0) {
+                    out.append(',');
+                }
+                append(out, values.get(i), mode, limits, depth + 1, level + 1);
+            }
+            out.append(']');
+        } else if (v instanceof MapValue) {
+            if (level >= Walk.deep) {
+                deep(out, v, mode, limits, depth);
+                return;
+            }
+            limits.checkDepth(depth);
+            final MapValue map = (MapValue) v;
+            if (map.size() == 1 && isWrapper(map.keyAt(0))) {
+                // The map would read back as the wrapped kind: escape it,
+                // which puts one more object around its entries.
+                out.append("{\"").append(MAP).append("\":");
+                entries(out, map, mode, limits, depth + 1, level);
+                out.append('}');
+            } else {
+                entries(out, map, mode, limits, depth, level);
+            }
+        } else {
+            limits.checkDepth(depth);
+            scalar(out, v, mode);
+        }
+    }
+
+    private static void entries(StringBuilder out, MapValue map, JsonMode mode, Limits limits, int depth, int level) {
+        out.append('{');
+        for (int i = 0; i < map.size(); i++) {
+            if (i > 0) {
+                out.append(',');
+            }
+            string(out, map.keyAt(i));
+            out.append(':');
+            append(out, map.valueAt(i), mode, limits, depth + 1, level + 1);
+        }
+        out.append('}');
+    }
+
+    /**
+     * Writes a list or a map at a depth without recursion: the lists and maps
+     * that are open are kept on a stack of their own.
+     */
+    private static void deep(StringBuilder out, Value v, JsonMode mode, Limits limits, int depth) {
+        final Walk.Open open = new Walk.Open();
+        Walk.Level l = null;
+        for (;;) {
+            limits.checkDepth(depth);
+            if (Walk.container(v)) {
+                l = open.push(v);
+                if (l.keys != null) {
+                    if (l.count == 1 && isWrapper(l.keys[0])) {
+                        out.append("{\"").append(MAP).append("\":{");
+                        l.close = "}}";
+                        l.depth = depth + 2;
+                    } else {
+                        out.append('{');
+                        l.close = "}";
+                        l.depth = depth + 1;
+                    }
+                } else if (l.indexes != null) {
+                    out.append("{\"").append(SPARSE).append("\":{");
+                    l.close = "}}";
+                    l.depth = depth + 1;
+                } else {
+                    out.append('[');
+                    l.close = "]";
+                    l.depth = depth + 1;
+                }
+            } else {
+                scalar(out, v, mode);
+            }
+            // The next value: of the list or map that is open, or of one around it.
+            for (;;) {
+                if (l == null) {
+                    return;
+                }
+                if (l.next == l.count) {
+                    out.append(l.close);
+                    l = open.pop();
+                    continue;
+                }
+                final int i = l.next++;
+                if (i > 0) {
+                    out.append(',');
+                }
+                if (l.keys != null) {
+                    string(out, l.keys[i]);
+                    out.append(':');
+                } else if (l.indexes != null) {
+                    out.append('"').append(l.indexes[i]).append("\":");
+                }
+                v = l.vals[i];
+                depth = l.depth;
+                break;
+            }
+        }
+    }
+
+    /** Writes a value that is not a list or a map. */
+    private static void scalar(StringBuilder out, Value v, JsonMode mode) {
         switch (v.kind()) {
             case NULL:
                 out.append("null");
@@ -98,64 +227,12 @@ final class Json {
             case TIMESTAMP:
                 wrapper(out, TIMESTAMP, v.toString());
                 return;
-            case LIST: {
-                final ListValue list = (ListValue) v;
-                if (list.isSparse()) {
-                    out.append("{\"").append(SPARSE).append("\":{");
-                    final List<ListValue.Item> items = list.items();
-                    for (int i = 0; i < items.size(); i++) {
-                        if (i > 0) {
-                            out.append(',');
-                        }
-                        final ListValue.Item item = items.get(i);
-                        out.append('"').append(item.key()).append("\":");
-                        append(out, item.value(), mode, limits, depth + 1);
-                    }
-                    out.append("}}");
-                    return;
-                }
-                out.append('[');
-                final List<Value> values = list.values();
-                for (int i = 0; i < values.size(); i++) {
-                    if (i > 0) {
-                        out.append(',');
-                    }
-                    append(out, values.get(i), mode, limits, depth + 1);
-                }
-                out.append(']');
-                return;
-            }
-            case MAP: {
-                final MapValue map = (MapValue) v;
-                if (map.size() == 1 && isWrapper(map.keyAt(0))) {
-                    // The map would read back as the wrapped kind: escape it.
-                    out.append("{\"").append(MAP).append("\":");
-                    entries(out, map, mode, limits, depth + 1);
-                    out.append('}');
-                    return;
-                }
-                entries(out, map, mode, limits, depth);
-                return;
-            }
             default: {
                 final ExtensionValue x = (ExtensionValue) v;
                 out.append("{\"").append(EXT).append("\":{\"base64\":\"").append(x.base64())
                         .append("\",\"type\":").append(x.type()).append("}}");
             }
         }
-    }
-
-    private static void entries(StringBuilder out, MapValue map, JsonMode mode, Limits limits, int depth) {
-        out.append('{');
-        for (int i = 0; i < map.size(); i++) {
-            if (i > 0) {
-                out.append(',');
-            }
-            string(out, map.keyAt(i));
-            out.append(':');
-            append(out, map.valueAt(i), mode, limits, depth + 1);
-        }
-        out.append('}');
     }
 
     private static void appendNumber(StringBuilder out, NumberValue n, JsonMode mode) {
@@ -270,17 +347,13 @@ final class Json {
 
     static Value parse(String text, Limits limits) {
         final Parser p = new Parser(text, limits);
-        try {
-            p.space();
-            final Object node = p.node(0);
-            p.space();
-            if (p.pos != text.length()) {
-                throw p.error("text after the value");
-            }
-            return p.build(node, false);
-        } catch (StackOverflowError e) {
-            throw new ValueException("json: value is nested too deeply for the stack");
+        p.space();
+        final Object node = p.read();
+        p.space();
+        if (p.pos != text.length()) {
+            throw p.error("text after the value");
         }
+        return p.build(node);
     }
 
     /**
@@ -292,6 +365,8 @@ final class Json {
         final int at;
         final ArrayList<String> keys = new ArrayList<String>();
         final ArrayList<Object> nodes = new ArrayList<Object>();
+        /** The key that was read last, whose value comes next. */
+        String pending;
 
         ObjectNode(int at) {
             this.at = at;
@@ -341,18 +416,110 @@ final class Json {
             return false;
         }
 
-        /** A leaf is its value; an array and an object are their nodes. */
-        Object node(int depth) {
-            limits.checkDepth(depth);
-            if (pos >= n) {
-                throw error("unexpected end");
+        /**
+         * Reads one value into nodes: a leaf is its value; an array and an
+         * object are their nodes. The arrays and objects that are open are kept
+         * on a stack of their own, not on the thread's.
+         */
+        Object read() {
+            Object[] open = new Object[8];
+            int depth = 0;
+            for (;;) {
+                limits.checkDepth(depth);
+                if (pos >= n) {
+                    throw error("unexpected end");
+                }
+                final char c = s.charAt(pos);
+                Object node;
+                if (c == '{') {
+                    final ObjectNode obj = new ObjectNode(pos);
+                    pos++;
+                    space();
+                    if (next('}')) {
+                        node = obj;
+                    } else {
+                        key(obj);
+                        if (depth == open.length) {
+                            open = Arrays.copyOf(open, depth * 2);
+                        }
+                        open[depth++] = obj;
+                        continue;
+                    }
+                } else if (c == '[') {
+                    final ArrayNode list = new ArrayNode();
+                    pos++;
+                    space();
+                    if (next(']')) {
+                        node = list;
+                    } else {
+                        if (depth == open.length) {
+                            open = Arrays.copyOf(open, depth * 2);
+                        }
+                        open[depth++] = list;
+                        continue;
+                    }
+                } else {
+                    node = leaf(c);
+                }
+                // The node is complete: it goes to the array or object it is in,
+                // which it may complete, and so on outwards.
+                for (;;) {
+                    if (depth == 0) {
+                        return node;
+                    }
+                    final Object parent = open[depth - 1];
+                    if (parent instanceof ObjectNode) {
+                        final ObjectNode obj = (ObjectNode) parent;
+                        obj.keys.add(obj.pending);
+                        obj.nodes.add(node);
+                        limits.checkCollectionLength(obj.keys.size());
+                        space();
+                        if (next(',')) {
+                            key(obj);
+                            break;
+                        }
+                        if (next('}')) {
+                            node = obj;
+                            open[--depth] = null;
+                            continue;
+                        }
+                        throw error("expected ',' or '}'");
+                    }
+                    final ArrayNode list = (ArrayNode) parent;
+                    list.nodes.add(node);
+                    limits.checkCollectionLength(list.nodes.size());
+                    space();
+                    if (next(',')) {
+                        space();
+                        break;
+                    }
+                    if (next(']')) {
+                        node = list;
+                        open[--depth] = null;
+                        continue;
+                    }
+                    throw error("expected ',' or ']'");
+                }
             }
-            final char c = s.charAt(pos);
+        }
+
+        /** Reads the key of the next entry of an object, and the colon after it. */
+        void key(ObjectNode obj) {
+            space();
+            if (pos >= n || s.charAt(pos) != '"') {
+                throw error("expected a key");
+            }
+            obj.pending = string();
+            space();
+            if (!next(':')) {
+                throw error("expected ':'");
+            }
+            space();
+        }
+
+        /** Reads a value that is not an array or an object, which starts with {@code c}. */
+        Object leaf(char c) {
             switch (c) {
-                case '{':
-                    return object(depth);
-                case '[':
-                    return array(depth);
                 case '"':
                     return new Utf8String(string());
                 case 't':
@@ -385,61 +552,6 @@ final class Json {
             }
             pos += word.length();
             return v;
-        }
-
-        Object object(int depth) {
-            final ObjectNode obj = new ObjectNode(pos);
-            pos++;
-            space();
-            if (next('}')) {
-                return obj;
-            }
-            for (;;) {
-                space();
-                if (pos >= n || s.charAt(pos) != '"') {
-                    throw error("expected a key");
-                }
-                final String key = string();
-                space();
-                if (!next(':')) {
-                    throw error("expected ':'");
-                }
-                space();
-                final Object node = node(depth + 1);
-                obj.keys.add(key);
-                obj.nodes.add(node);
-                limits.checkCollectionLength(obj.keys.size());
-                space();
-                if (next(',')) {
-                    continue;
-                }
-                if (next('}')) {
-                    return obj;
-                }
-                throw error("expected ',' or '}'");
-            }
-        }
-
-        Object array(int depth) {
-            final ArrayNode list = new ArrayNode();
-            pos++;
-            space();
-            if (next(']')) {
-                return list;
-            }
-            for (;;) {
-                space();
-                list.nodes.add(node(depth + 1));
-                limits.checkCollectionLength(list.nodes.size());
-                space();
-                if (next(',')) {
-                    continue;
-                }
-                if (next(']')) {
-                    return list;
-                }
-                throw error("expected ',' or ']'");
-            }
         }
 
         /**
@@ -539,52 +651,109 @@ final class Json {
             return r;
         }
 
-        /** Turns a node into its value. A literal object is the body of a $map escape: a map whatever its keys. */
-        Value build(Object node, boolean literal) {
-            if (node instanceof Value) {
-                return (Value) node;
+        /** An array or an object whose values are being built. */
+        private static final class Building {
+            final Object node;
+            /** An object that is a wrapper: its one value is read, not kept. */
+            final boolean wrapper;
+            final Value[] vals;
+            int next;
+
+            Building(Object node, boolean wrapper, int size) {
+                this.node = node;
+                this.wrapper = wrapper;
+                this.vals = new Value[size];
             }
-            if (node instanceof ArrayNode) {
-                final ArrayList<Object> nodes = ((ArrayNode) node).nodes;
-                if (nodes.isEmpty()) {
-                    return DenseList.EMPTY;
-                }
-                final Value[] items = new Value[nodes.size()];
-                for (int i = 0; i < items.length; i++) {
-                    items[i] = build(nodes.get(i), false);
-                }
-                return new DenseList(items);
+
+            Object child(int i) {
+                return node instanceof ArrayNode ? ((ArrayNode) node).nodes.get(i) : ((ObjectNode) node).nodes.get(i);
             }
-            final ObjectNode obj = (ObjectNode) node;
-            final int size = obj.keys.size();
-            if (!literal && size == 1 && isWrapper(obj.keys.get(0))) {
-                final String key = obj.keys.get(0);
-                final Object inner = obj.nodes.get(0);
-                if (key.equals(MAP)) {
-                    if (!(inner instanceof ObjectNode)) {
-                        throw errorAt(obj.at, key + " wants an object");
+        }
+
+        /**
+         * Turns a node into its value, from the leaves up. What is being built
+         * is kept on a stack of its own, not on the thread's.
+         */
+        Value build(Object node) {
+            Building[] open = new Building[8];
+            int depth = 0;
+            // The body of a $map escape is a map whatever its keys.
+            boolean literal = false;
+            for (;;) {
+                Value v;
+                Building opened = null;
+                if (node instanceof Value) {
+                    v = (Value) node;
+                } else if (node instanceof ArrayNode) {
+                    final int size = ((ArrayNode) node).nodes.size();
+                    v = DenseList.EMPTY;
+                    if (size != 0) {
+                        opened = new Building(node, false, size);
                     }
-                    return build(inner, true);
+                } else {
+                    final ObjectNode obj = (ObjectNode) node;
+                    final int size = obj.keys.size();
+                    v = MapValue.EMPTY;
+                    if (!literal && size == 1 && isWrapper(obj.keys.get(0))) {
+                        if (obj.keys.get(0).equals(MAP)) {
+                            final Object inner = obj.nodes.get(0);
+                            if (!(inner instanceof ObjectNode)) {
+                                throw errorAt(obj.at, MAP + " wants an object");
+                            }
+                            node = inner;
+                            literal = true;
+                            continue;
+                        }
+                        opened = new Building(obj, true, 1);
+                    } else if (size != 0) {
+                        opened = new Building(obj, false, size);
+                    }
                 }
-                final Value v = build(inner, false);
+                literal = false;
+                if (opened != null) {
+                    if (depth == open.length) {
+                        open = Arrays.copyOf(open, depth * 2);
+                    }
+                    open[depth++] = opened;
+                    node = opened.child(0);
+                    continue;
+                }
+                // The value is built: it goes to what is being built around it,
+                // which it may complete, and so on outwards.
+                for (;;) {
+                    if (depth == 0) {
+                        return v;
+                    }
+                    final Building b = open[depth - 1];
+                    b.vals[b.next++] = v;
+                    if (b.next < b.vals.length) {
+                        node = b.child(b.next);
+                        break;
+                    }
+                    open[--depth] = null;
+                    v = finish(b);
+                }
+            }
+        }
+
+        /** The list, the map, or the value of the wrapper that an array or an object is once its values are built. */
+        private Value finish(Building b) {
+            if (b.node instanceof ArrayNode) {
+                return new DenseList(b.vals);
+            }
+            final ObjectNode obj = (ObjectNode) b.node;
+            if (b.wrapper) {
+                final String key = obj.keys.get(0);
                 try {
-                    return wrapped(key, v);
+                    return wrapped(key, b.vals[0]);
                 } catch (ValueException e) {
                     throw errorAt(obj.at, e.getMessage());
                 } catch (ArithmeticException e) {
                     throw errorAt(obj.at, key + ": " + e.getMessage());
                 }
             }
-            if (size == 0) {
-                return MapValue.EMPTY;
-            }
-            final String[] keys = obj.keys.toArray(new String[0]);
-            final Value[] vals = new Value[size];
-            for (int i = 0; i < size; i++) {
-                vals[i] = build(obj.nodes.get(i), false);
-            }
-            final MapValue map = MapValue.of(keys, vals, false);
-            for (int i = 1; i < size; i++) {
+            final MapValue map = MapValue.of(obj.keys.toArray(new String[0]), b.vals, false);
+            for (int i = 1; i < b.vals.length; i++) {
                 if (map.keyAt(i - 1).equals(map.keyAt(i))) {
                     throw errorAt(obj.at, "duplicate key \"" + map.keyAt(i) + "\"");
                 }

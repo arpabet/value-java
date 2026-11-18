@@ -231,21 +231,41 @@ final class MutableDenseList extends ListValue {
     }
 
     @Override
+    void open(Walk.Level level) {
+        level.vals = items;
+        level.count = size;
+    }
+
+    @Override
     void pack(Packer p) {
+        if (!p.enter()) {
+            Walk.pack(this, p);
+            return;
+        }
         p.listHeader(size);
         for (int i = 0; i < size; i++) {
             items[i].pack(p);
         }
+        p.leave();
     }
 
     @Override
     void jsonify(StringBuilder out) {
+        jsonify(out, 0);
+    }
+
+    @Override
+    void jsonify(StringBuilder out, int depth) {
+        if (depth >= Walk.deep) {
+            Walk.jsonify(this, out);
+            return;
+        }
         out.append('[');
         for (int i = 0; i < size; i++) {
             if (i != 0) {
                 out.append(',');
             }
-            items[i].jsonify(out);
+            items[i].jsonify(out, depth + 1);
         }
         out.append(']');
     }

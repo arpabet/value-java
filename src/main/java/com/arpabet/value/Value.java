@@ -46,7 +46,12 @@ import java.util.Map;
  * }</pre>
  *
  * <p>Two values are {@linkplain #equals(Object) equal} exactly when their
- * canonical bytes are equal.
+ * canonical bytes are equal, but for a sparse list with nothing in it, which
+ * has the bytes of the empty map and is not equal to it.
+ *
+ * <p>Nothing done with a value depends on the thread's stack: the lists and
+ * maps that are open while a deep value is read, packed, printed, compared or
+ * hashed are kept on the heap.
  *
  * <p>The hierarchy is closed: the kinds are the permitted subclasses, and
  * {@link #kind()} tells them apart without a cast.
@@ -570,6 +575,26 @@ public abstract sealed class Value
     /** Opens sealed bytes and reads the value in them, within the limits. */
     public static Value unseal(byte[] sealed, byte[] senderPublicKey, byte[] recipientPrivateKey, Limits limits) {
         return Sealer.of(senderPublicKey, recipientPrivateKey).unseal(sealed, limits);
+    }
+
+    // --- at a depth ------------------------------------------------------------
+    //
+    // A list or a map prints, compares and hashes what it holds by recursion,
+    // as packing does, for the first levels of a value ({@link Walk#deep}),
+    // and goes on without recursion past them. These are what it asks of a
+    // value it holds, with the depth that value is at; any value but a list
+    // or a map answers as it would at any depth.
+
+    void jsonify(StringBuilder out, int depth) {
+        jsonify(out);
+    }
+
+    boolean same(Value other, int depth) {
+        return equals(other);
+    }
+
+    int hash(int depth) {
+        return hashCode();
     }
 
     // --- text ----------------------------------------------------------------

@@ -18,7 +18,7 @@ final class DenseList extends ListValue {
     static final DenseList EMPTY = new DenseList(new Value[0]);
 
     private final Value[] items;
-    private int hash;
+    int hash;
 
     /** Takes the array, which holds no null and nothing mutable, without a copy. */
     DenseList(Value[] items) {
@@ -174,38 +174,82 @@ final class DenseList extends ListValue {
     }
 
     @Override
+    void open(Walk.Level level) {
+        level.vals = items;
+        level.count = items.length;
+    }
+
+    @Override
     void pack(Packer p) {
+        if (!p.enter()) {
+            Walk.pack(this, p);
+            return;
+        }
         p.listHeader(items.length);
         for (Value v : items) {
             v.pack(p);
         }
+        p.leave();
     }
 
     @Override
     void jsonify(StringBuilder out) {
+        jsonify(out, 0);
+    }
+
+    @Override
+    void jsonify(StringBuilder out, int depth) {
+        if (depth >= Walk.deep) {
+            Walk.jsonify(this, out);
+            return;
+        }
         out.append('[');
         for (int i = 0; i < items.length; i++) {
             if (i != 0) {
                 out.append(',');
             }
-            items[i].jsonify(out);
+            items[i].jsonify(out, depth + 1);
         }
         out.append(']');
     }
 
     @Override
     public boolean equals(Object o) {
-        if (o instanceof MutableDenseList) {
-            o = ((MutableDenseList) o).toImmutable();
-        }
-        return o == this || (o instanceof DenseList && Arrays.equals(((DenseList) o).items, items));
+        return o instanceof Value && same((Value) o, 0);
     }
 
     @Override
+    boolean same(Value o, int depth) {
+        if (o instanceof MutableDenseList) {
+            o = o.toImmutable();
+        }
+        if (o == this) {
+            return true;
+        }
+        if (!(o instanceof DenseList)) {
+            return false;
+        }
+        final Value[] other = ((DenseList) o).items;
+        if (other.length != items.length) {
+            return false;
+        }
+        return depth >= Walk.deep ? Walk.equal(this, o) : Walk.sameValues(items, other, depth);
+    }
+
+    /** What {@code Arrays.hashCode} gives for the values. */
+    @Override
     public int hashCode() {
+        return hash(0);
+    }
+
+    @Override
+    int hash(int depth) {
         int h = hash;
         if (h == 0) {
-            h = Arrays.hashCode(items);
+            if (depth >= Walk.deep) {
+                return Walk.hash(this);
+            }
+            h = Walk.hashValues(items, depth);
             hash = h;
         }
         return h;

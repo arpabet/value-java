@@ -21,7 +21,7 @@ final class SparseList extends ListValue {
     /** Ascending; equal indexes keep the order they were given in. */
     private final int[] keys;
     private final Value[] vals;
-    private int hash;
+    int hash;
 
     private SparseList(int[] keys, Value[] vals) {
         this.keys = keys;
@@ -270,31 +270,57 @@ final class SparseList extends ListValue {
     }
 
     @Override
+    void open(Walk.Level level) {
+        level.indexes = keys;
+        level.vals = vals;
+        level.count = keys.length;
+    }
+
+    @Override
     void pack(Packer p) {
+        if (!p.enter()) {
+            Walk.pack(this, p);
+            return;
+        }
         p.mapHeader(keys.length);
         for (int i = 0; i < keys.length; i++) {
             p.integer(keys[i]);
             vals[i].pack(p);
         }
+        p.leave();
     }
 
     @Override
     void jsonify(StringBuilder out) {
+        jsonify(out, 0);
+    }
+
+    @Override
+    void jsonify(StringBuilder out, int depth) {
+        if (depth >= Walk.deep) {
+            Walk.jsonify(this, out);
+            return;
+        }
         out.append('{');
         for (int i = 0; i < keys.length; i++) {
             if (i != 0) {
                 out.append(',');
             }
             out.append('"').append(keys[i]).append("\": ");
-            vals[i].jsonify(out);
+            vals[i].jsonify(out, depth + 1);
         }
         out.append('}');
     }
 
     @Override
     public boolean equals(Object o) {
+        return o instanceof Value && same((Value) o, 0);
+    }
+
+    @Override
+    boolean same(Value o, int depth) {
         if (o instanceof MutableSparseList) {
-            o = ((MutableSparseList) o).toImmutable();
+            o = o.toImmutable();
         }
         if (o == this) {
             return true;
@@ -303,14 +329,26 @@ final class SparseList extends ListValue {
             return false;
         }
         final SparseList s = (SparseList) o;
-        return Arrays.equals(s.keys, keys) && Arrays.equals(s.vals, vals);
+        if (!Arrays.equals(s.keys, keys)) {
+            return false;
+        }
+        return depth >= Walk.deep ? Walk.equal(this, s) : Walk.sameValues(vals, s.vals, depth);
+    }
+
+    /** What {@code Arrays.hashCode} gives for the indexes, times 31, plus what it gives for the values. */
+    @Override
+    public int hashCode() {
+        return hash(0);
     }
 
     @Override
-    public int hashCode() {
+    int hash(int depth) {
         int h = hash;
         if (h == 0) {
-            h = Arrays.hashCode(keys) * 31 + Arrays.hashCode(vals);
+            if (depth >= Walk.deep) {
+                return Walk.hash(this);
+            }
+            h = Arrays.hashCode(keys) * 31 + Walk.hashValues(vals, depth);
             hash = h;
         }
         return h;
