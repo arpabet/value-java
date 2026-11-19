@@ -35,9 +35,10 @@ dependencies {
 
 It is on Maven Central (`mavenCentral()` in the repositories). To use a build
 of your own instead, build it into the local Maven repository
-(`./gradlew publishToMavenLocal`, then add `mavenLocal()` to the repositories)
-or include this repository as a composite build (`includeBuild("path/to/value-java")`
-in `settings.gradle`), which substitutes the dependency above.
+(`./gradlew publishToMavenLocal`, then add `mavenLocal()` to the repositories
+and depend on the version that `build.gradle.kts` has) or include this
+repository as a composite build (`includeBuild("path/to/value-java")` in
+`settings.gradle`), which substitutes the dependency above whatever its version.
 
 ## Values
 
@@ -509,7 +510,7 @@ Where the two differ, on purpose:
 
 ```sh
 ./gradlew build                  # compile, test, check the Android API level
-./gradlew publishToMavenLocal    # com.arpabet:value:0.1.0
+./gradlew publishToMavenLocal    # com.arpabet:value, in the version of build.gradle.kts
 ```
 
 Two workflows run on GitHub. `build.yaml` builds and tests every push on JDK
@@ -517,9 +518,11 @@ Two workflows run on GitHub. `build.yaml` builds and tests every push on JDK
 runs the tests against a larger one written on the spot. `release.yaml`
 publishes to Maven Central: push the tag `v` + the `version` of
 `build.gradle.kts`, or run it by hand to stage a release in the Central
-Portal without publishing it. What it needs set up once (the Portal account,
-its token and a signing key, as repository secrets) is listed at its top. The
-jars are reproducible: the same sources give the same bytes.
+Portal without publishing it. Between releases the version ends in
+`-SNAPSHOT`, which the workflow refuses to release. What it needs set up once
+(the Portal account, its token and a signing key, as repository secrets) is
+listed at its top. The jars are reproducible: the same sources give the same
+bytes.
 
 JDK 17 or newer. To regenerate the golden corpus after a change of the Go
 implementation: `cd conformance && go run .`
