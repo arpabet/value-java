@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## v0.1.0 — unreleased
+## v0.1.0 — 2026-11-19
 
 The first version: the Java implementation of
 [`go.arpabet.com/value`](https://github.com/arpabet/value) v1.6.1, binary

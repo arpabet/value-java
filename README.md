@@ -33,7 +33,8 @@ dependencies {
 }
 ```
 
-Until the artifact is published, build it into the local Maven repository
+It is on Maven Central (`mavenCentral()` in the repositories). To use a build
+of your own instead, build it into the local Maven repository
 (`./gradlew publishToMavenLocal`, then add `mavenLocal()` to the repositories)
 or include this repository as a composite build (`includeBuild("path/to/value-java")`
 in `settings.gradle`), which substitutes the dependency above.
