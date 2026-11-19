@@ -5,6 +5,7 @@
 
 package com.arpabet.value;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -68,7 +69,17 @@ class HardeningTest {
         assertEquals(deep, Value.unpack(deep.pack()));
     }
 
-    /** Runs on a thread with the smallest stack the runtime gives, and reports what was thrown there. */
+    /**
+     * The stack of the threads the tests below run on: a quarter of the
+     * megabyte a thread has by default on Linux and on Android, of which the
+     * library takes under 16 KB. Not the least stack a JVM gives, which it
+     * gives when asked for less: that is another on every platform (it leaves
+     * Java under 40 KB on Linux and 90 KB on a Mac with Apple silicon),
+     * nothing to hold a test to.
+     */
+    private static final long SMALL_STACK = 256 * 1024;
+
+    /** Runs on a thread with a small stack, and reports what was thrown there. */
     private static void onASmallStack(Runnable work) throws Exception {
         final Throwable[] failure = new Throwable[1];
         final Thread small = new Thread(null, () -> {
@@ -77,7 +88,7 @@ class HardeningTest {
             } catch (Throwable t) {
                 failure[0] = t;
             }
-        }, "small-stack", 16 * 1024);
+        }, "small-stack", SMALL_STACK);
         small.start();
         small.join();
         if (failure[0] != null) {
@@ -85,21 +96,21 @@ class HardeningTest {
         }
     }
 
-    /** A thousand maps in one another, each with one key, around a 1. */
-    private static byte[] nestedMaps(int depth) {
+    /** Maps in one another, each with one key, around a leaf. */
+    private static byte[] nestedMaps(int depth, int leaf) {
         final byte[] maps = new byte[3 * depth + 1];
         for (int i = 0; i < depth; i++) {
             maps[3 * i] = (byte) 0x81;
             maps[3 * i + 1] = (byte) 0xa1;
             maps[3 * i + 2] = 'a';
         }
-        maps[3 * depth] = 0x01;
+        maps[3 * depth] = (byte) leaf;
         return maps;
     }
 
-    /** Lists, maps and sparse lists in turn, each with something beside the next one, around a 1. */
-    private static Value mixed(int depth) {
-        Value v = Value.ofLong(1);
+    /** Lists, maps and sparse lists in turn, each with something beside the next one, around a leaf. */
+    private static Value mixed(int depth, long leaf) {
+        Value v = Value.ofLong(leaf);
         for (int i = 0; i < depth; i++) {
             switch (i % 3) {
                 case 0:
@@ -116,26 +127,52 @@ class HardeningTest {
         return v;
     }
 
+    /** How many lists and maps are in one another, going by the first list or map that each holds. */
+    private static int depth(Value v) {
+        int depth = 0;
+        while (v instanceof ListValue || v instanceof MapValue) {
+            depth++;
+            Value inner = null;
+            if (v instanceof ListValue) {
+                for (ListValue.Item item : ((ListValue) v).items()) {
+                    if (item.value() instanceof ListValue || item.value() instanceof MapValue) {
+                        inner = item.value();
+                        break;
+                    }
+                }
+            } else {
+                for (Value each : ((MapValue) v).values()) {
+                    if (each instanceof ListValue || each instanceof MapValue) {
+                        inner = each;
+                        break;
+                    }
+                }
+            }
+            v = inner;
+        }
+        return depth;
+    }
+
     @Test
-    void decodingDoesNotDependOnTheStack() throws Exception {
+    void decodingTakesNoStackForTheDepthOfAValue() throws Exception {
         // The decoder keeps the lists and maps it has open on a stack of its
-        // own, so a thousand levels decode on the smallest of thread stacks.
+        // own, so a thousand levels decode on a small thread stack.
         onASmallStack(() -> {
-            assertEquals(Kind.LIST, Value.unpack(nested(1000, 0x01)).kind());
-            assertEquals(Kind.MAP, Value.unpack(nestedMaps(1000)).kind());
+            assertEquals(1000, depth(Value.unpack(nested(1000, 0x01))));
+            assertEquals(1000, depth(Value.unpack(nestedMaps(1000, 0x01))));
         });
     }
 
     /**
      * A decoder accepts a thousand levels, so whatever is done next with what
-     * it gave has to work at that depth on any thread: none of it recurses
-     * with the depth of the value.
+     * it gave has to work at that depth on a thread with a small stack as on
+     * any other.
      */
     @Test
-    void nothingDoneWithAValueDependsOnTheStack() throws Exception {
+    void aThousandLevelsWorkOnASmallStack() throws Exception {
         final byte[] lists = nested(1000, 0x01);
-        final byte[] maps = nestedMaps(1000);
-        final Value tree = mixed(999);
+        final byte[] maps = nestedMaps(1000, 0x01);
+        final Value tree = mixed(999, 1);
         final byte[] trees = tree.pack();
         final String listJson = repeat("[", 1000) + "1" + repeat("]", 1000);
         final String mapJson = repeat("{\"a\":", 1000) + "1" + repeat("}", 1000);
@@ -180,44 +217,54 @@ class HardeningTest {
         });
     }
 
-    /** How many lists and maps are around the innermost value, going by the first value of each. */
-    private static int depth(Value v) {
-        int depth = 0;
-        for (;;) {
-            if (v instanceof ListValue && ((ListValue) v).count() > 0) {
-                v = ((ListValue) v).items().get(0).value();
-            } else if (v instanceof MapValue && !((MapValue) v).isEmpty()) {
-                v = ((MapValue) v).values().get(0);
-            } else {
-                return depth;
-            }
-            depth++;
-        }
-    }
-
+    /**
+     * None of it takes more of the stack for a deeper value. Without a limit
+     * of depth, a hundred thousand lists in one another decode, pack, compare,
+     * hash, print and go to JSON and back on a small stack, and so do as many
+     * maps, and as many lists, maps and sparse lists in turn: going down all
+     * of them by recursion would take megabytes of it.
+     */
     @Test
-    void withoutADepthLimitAnyDepthWorks() throws Exception {
-        // No limit: a value of any depth decodes, and packs, prints, compares
-        // and hashes, on a small stack as on any other.
+    void noneOfItRecursesWithTheDepthOfAValue() throws Exception {
         final Limits unlimited = Limits.DEFAULT.withMaxDepth(0);
-        final int depth = 200_000;
-        final byte[] bytes = nested(depth, 0x01);
+        final int depth = 100_000;
+        final byte[][] shapes = {nested(depth, 0x01), nestedMaps(depth, 0x01), mixed(depth, 1).pack()};
+        // The same but for the innermost value.
+        final byte[][] others = {nested(depth, 0x02), nestedMaps(depth, 0x02), mixed(depth, 2).pack()};
         final String json = repeat("[", depth) + repeat("]", depth);
+        final byte[] ours = Sealer.newPrivateKey();
+        final byte[] theirs = Sealer.newPrivateKey();
+
         onASmallStack(() -> {
-            final Value deep = Value.unpack(bytes, unlimited);
-            assertEquals(Kind.LIST, deep.kind());
-            assertEquals(depth, depth(deep));
-            assertEquals(depth + 1, deep.pack().length);
-            assertEquals(deep, Value.unpack(deep.pack(), unlimited));
-            assertEquals(deep.hashCode(), Value.unpack(bytes, unlimited).hashCode());
-            assertEquals(2 * depth + 1, deep.toString().length());
-            assertEquals(2 * depth + 1, deep.toJson(JsonMode.RELAXED, unlimited).length());
-            assertEquals(deep, Value.parseJson(deep.toJson(JsonMode.CANONICAL, unlimited), unlimited));
-            assertEquals(depth - 1, depth(Value.parseJson(json, unlimited)));
+            for (int i = 0; i < shapes.length; i++) {
+                final byte[] bytes = shapes[i];
+                final Value v = Value.unpack(bytes, unlimited);
+                final Value again = Value.unpack(bytes, unlimited);
+                assertEquals(depth, depth(v));
+                // Canonical bytes, and what is made of them.
+                assertArrayEquals(bytes, v.pack());
+                assertEquals(32, v.hash("SHA-256").length);
+                final byte[] sealed = v.seal(Sealer.publicKey(theirs), ours);
+                assertTrue(v.equals(Value.unseal(sealed, Sealer.publicKey(ours), theirs, unlimited)));
+                // Equal all the way down, and another at the very bottom.
+                assertTrue(v.equals(again));
+                assertEquals(v.hashCode(), again.hashCode());
+                assertFalse(v.equals(Value.unpack(others[i], unlimited)));
+                // Text, and JSON there and back.
+                assertEquals(again.toString(), v.toString());
+                assertEquals(again.jsonify(), v.jsonify());
+                assertEquals(again.toJson(JsonMode.RELAXED, unlimited), v.toJson(JsonMode.RELAXED, unlimited));
+                assertTrue(v.equals(Value.parseJson(v.toJson(JsonMode.CANONICAL, unlimited), unlimited)));
+            }
+            // What lists around a 1 look like is known to the character.
+            final Value lists = Value.unpack(shapes[0], unlimited);
+            assertEquals(repeat("[", depth) + "1" + repeat("]", depth), lists.toString());
+            assertEquals(lists.toString(), lists.toJson(JsonMode.RELAXED, unlimited));
+            assertEquals(depth, depth(Value.parseJson(json, unlimited)));
             // With the limit of every day, it is the limit that speaks.
-            assertThrows(ValueException.class, () -> deep.toJson(JsonMode.CANONICAL));
+            assertThrows(ValueException.class, () -> lists.toJson(JsonMode.CANONICAL));
             assertThrows(ValueException.class, () -> Value.parseJson(json));
-            assertThrows(ValueException.class, () -> Value.unpack(bytes));
+            assertThrows(ValueException.class, () -> Value.unpack(shapes[0]));
         });
     }
 

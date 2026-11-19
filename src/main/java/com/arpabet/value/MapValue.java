@@ -533,7 +533,7 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
     }
 
     @Override
-    boolean same(Value o, int depth) {
+    boolean same(Value o, int spent) {
         if (o == this) {
             return true;
         }
@@ -548,7 +548,7 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
         if (!Arrays.equals(a.keys, b.keys)) {
             return false;
         }
-        return depth >= Walk.deep ? Walk.equal(a, b) : Walk.sameValues(a.vals, b.vals, depth);
+        return spent >= Walk.deep ? Walk.equal(a, b) : Walk.sameValues(a.vals, b.vals, spent);
     }
 
     /** What {@code Arrays.hashCode} gives for the keys, times 31, plus what it gives for the values. */
@@ -558,15 +558,15 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
     }
 
     @Override
-    int hash(int depth) {
+    int hash(int spent) {
         // Of a mutable map, the hash of an immutable copy: its state may hold what changes.
         final MapValue m = toImmutable();
         int h = m.hash;
         if (h == 0) {
-            if (depth >= Walk.deep) {
+            if (spent >= Walk.deep) {
                 return Walk.hash(m);
             }
-            h = Arrays.hashCode(m.keys) * 31 + Walk.hashValues(m.vals, depth);
+            h = Arrays.hashCode(m.keys) * 31 + Walk.hashValues(m.vals, spent);
             m.hash = h;
         }
         return h;

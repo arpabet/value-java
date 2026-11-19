@@ -78,10 +78,13 @@ final class Json {
      * for the first levels of a value; a list or a map further down is
      * written without ({@link #deep}), so that the depth a value may have is
      * a matter of the limit and not of the stack the caller happens to run on.
+     * The frame of this method is several of what packing has, so a level
+     * here takes {@link Walk#JSON} of the allowance for recursion
+     * ({@link Walk#deep}); {@code spent} is how much the levels above took.
      */
-    private static void append(StringBuilder out, Value v, JsonMode mode, Limits limits, int depth, int level) {
+    private static void append(StringBuilder out, Value v, JsonMode mode, Limits limits, int depth, int spent) {
         if (v instanceof ListValue) {
-            if (level >= Walk.deep) {
+            if (spent >= Walk.deep) {
                 deep(out, v, mode, limits, depth);
                 return;
             }
@@ -96,7 +99,7 @@ final class Json {
                     }
                     final ListValue.Item item = items.get(i);
                     out.append('"').append(item.key()).append("\":");
-                    append(out, item.value(), mode, limits, depth + 1, level + 1);
+                    append(out, item.value(), mode, limits, depth + 1, spent + Walk.JSON);
                 }
                 out.append("}}");
                 return;
@@ -107,11 +110,11 @@ final class Json {
                 if (i > 0) {
                     out.append(',');
                 }
-                append(out, values.get(i), mode, limits, depth + 1, level + 1);
+                append(out, values.get(i), mode, limits, depth + 1, spent + Walk.JSON);
             }
             out.append(']');
         } else if (v instanceof MapValue) {
-            if (level >= Walk.deep) {
+            if (spent >= Walk.deep) {
                 deep(out, v, mode, limits, depth);
                 return;
             }
@@ -121,10 +124,10 @@ final class Json {
                 // The map would read back as the wrapped kind: escape it,
                 // which puts one more object around its entries.
                 out.append("{\"").append(MAP).append("\":");
-                entries(out, map, mode, limits, depth + 1, level);
+                entries(out, map, mode, limits, depth + 1, spent);
                 out.append('}');
             } else {
-                entries(out, map, mode, limits, depth, level);
+                entries(out, map, mode, limits, depth, spent);
             }
         } else {
             limits.checkDepth(depth);
@@ -132,7 +135,7 @@ final class Json {
         }
     }
 
-    private static void entries(StringBuilder out, MapValue map, JsonMode mode, Limits limits, int depth, int level) {
+    private static void entries(StringBuilder out, MapValue map, JsonMode mode, Limits limits, int depth, int spent) {
         out.append('{');
         for (int i = 0; i < map.size(); i++) {
             if (i > 0) {
@@ -140,7 +143,7 @@ final class Json {
             }
             string(out, map.keyAt(i));
             out.append(':');
-            append(out, map.valueAt(i), mode, limits, depth + 1, level + 1);
+            append(out, map.valueAt(i), mode, limits, depth + 1, spent + Walk.JSON);
         }
         out.append('}');
     }

@@ -318,7 +318,7 @@ final class SparseList extends ListValue {
     }
 
     @Override
-    boolean same(Value o, int depth) {
+    boolean same(Value o, int spent) {
         if (o instanceof MutableSparseList) {
             o = o.toImmutable();
         }
@@ -332,7 +332,7 @@ final class SparseList extends ListValue {
         if (!Arrays.equals(s.keys, keys)) {
             return false;
         }
-        return depth >= Walk.deep ? Walk.equal(this, s) : Walk.sameValues(vals, s.vals, depth);
+        return spent >= Walk.deep ? Walk.equal(this, s) : Walk.sameValues(vals, s.vals, spent);
     }
 
     /** What {@code Arrays.hashCode} gives for the indexes, times 31, plus what it gives for the values. */
@@ -342,13 +342,13 @@ final class SparseList extends ListValue {
     }
 
     @Override
-    int hash(int depth) {
+    int hash(int spent) {
         int h = hash;
         if (h == 0) {
-            if (depth >= Walk.deep) {
+            if (spent >= Walk.deep) {
                 return Walk.hash(this);
             }
-            h = Arrays.hashCode(keys) * 31 + Walk.hashValues(vals, depth);
+            h = Arrays.hashCode(keys) * 31 + Walk.hashValues(vals, spent);
             hash = h;
         }
         return h;

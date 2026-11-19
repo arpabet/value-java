@@ -219,7 +219,7 @@ final class DenseList extends ListValue {
     }
 
     @Override
-    boolean same(Value o, int depth) {
+    boolean same(Value o, int spent) {
         if (o instanceof MutableDenseList) {
             o = o.toImmutable();
         }
@@ -233,7 +233,7 @@ final class DenseList extends ListValue {
         if (other.length != items.length) {
             return false;
         }
-        return depth >= Walk.deep ? Walk.equal(this, o) : Walk.sameValues(items, other, depth);
+        return spent >= Walk.deep ? Walk.equal(this, o) : Walk.sameValues(items, other, spent);
     }
 
     /** What {@code Arrays.hashCode} gives for the values. */
@@ -243,13 +243,13 @@ final class DenseList extends ListValue {
     }
 
     @Override
-    int hash(int depth) {
+    int hash(int spent) {
         int h = hash;
         if (h == 0) {
-            if (depth >= Walk.deep) {
+            if (spent >= Walk.deep) {
                 return Walk.hash(this);
             }
-            h = Walk.hashValues(items, depth);
+            h = Walk.hashValues(items, spent);
             hash = h;
         }
         return h;

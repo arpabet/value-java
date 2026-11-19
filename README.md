@@ -353,11 +353,15 @@ depth 1000, 16,777,216 elements per list or map, 1 GiB per string, binary or
 extension, decimal exponent 1,048,576. A header that claims a length the input
 does not deliver allocates nothing.
 
-Nothing done with a value depends on the thread's stack. Decoding, packing,
-JSON in both directions, printing, comparing and hashing keep the lists and
-maps they have open on the heap once a value nests more than a few levels, so
-a value of the full default depth, or of any depth without a limit, works on
-the small stack of an Android background thread as it does on a server's.
+A deeper value takes no more of the thread's stack. Decoding and reading JSON
+keep the lists and maps they have open on the heap. Packing, printing,
+comparing, hashing and writing JSON go through the first levels of a value by
+recursion (64 levels; 32 for comparing and hashing, 16 for writing JSON) and
+keep what is open on the heap past them. So whatever the depth of a value,
+each takes under 16 KB of stack (measured on HotSpot 17 and 21, x86-64 and
+arm64), and a value of the full default depth, or of any depth without a
+limit, works on the small stack of an Android background thread as it does on
+a server's.
 
 ```java
 Limits tight = Limits.DEFAULT.withMaxDepth(32).withMaxByteLength(1 << 20);

@@ -12,21 +12,37 @@ import java.util.Arrays;
  * kept on a stack of their own, on the heap, so that how deep a value nests
  * is no matter of the thread's stack. A decoder accepts a thousand levels by
  * default, and a value that deep has to pack, print, compare and hash on a
- * thread of any size, as it does in Go, where a stack grows.
+ * thread with a small stack as on any other, as it does in Go, where a stack
+ * grows.
  *
  * <p>The few levels a value usually has are gone through by plain recursion,
- * which is the fastest way and costs no memory; a list or a map that finds
- * itself {@link #deep} levels down hands itself, and what it holds, over to
- * the methods here.
+ * which is the fastest way and costs no memory. What recursion may take of
+ * the stack is bounded ({@link #deep}): a list or a map that finds itself
+ * past the bound hands itself, and what it holds, over to the methods here.
  */
 final class Walk {
 
     /**
-     * How many lists and maps deep a value is gone through by plain recursion
-     * before it goes on from here. Not final: the tests lower it to send every
-     * value this way.
+     * How much of the stack plain recursion may take before a walk goes on
+     * from here, counted in levels of packing or printing, whose frames are
+     * the smallest. A level of comparing or hashing counts for
+     * {@link #COMPARE}, and a level of the writer of JSON for {@link #JSON},
+     * which is how much more of the stack they take. So packing and printing
+     * recurse for the first 64 levels of a value, comparing and hashing for
+     * 32, and the writer of JSON for 16; and whatever the depth of the value,
+     * each takes about as much of the stack at the most. Measured on HotSpot
+     * 17 and 21, on x86-64 and arm64, interpreted and compiled, that is 10 to
+     * 13 KB; the frames of compiled code change with what a program has run.
+     *
+     * <p>Not final: the tests lower it to send every value this way.
      */
     static int deep = 64;
+
+    /** What a level of comparing or hashing counts for: it is two frames, where packing has one. */
+    static final int COMPARE = 2;
+
+    /** What a level of the writer of JSON counts for: its frame is the largest by far. */
+    static final int JSON = 4;
 
     private Walk() {
     }
@@ -57,26 +73,27 @@ final class Walk {
     }
 
     /**
-     * Whether the values of two lists or maps at a depth, which are of one
-     * kind and have the same keys, are equal.
+     * Whether the values of two lists or maps, which are of one kind and have
+     * the same keys, are equal; {@code spent} is how much of {@link #deep}
+     * the recursion that came to them has taken.
      */
-    static boolean sameValues(Value[] x, Value[] y, int depth) {
+    static boolean sameValues(Value[] x, Value[] y, int spent) {
         for (int i = 0; i < x.length; i++) {
             final Value v = x[i];
             final Value w = y[i];
-            // A value that is no list or map answers at once; asking it by depth would only ask it twice.
-            if (v != w && !(container(v) ? v.same(w, depth + 1) : v.equals(w))) {
+            // A value that is no list or map answers at once: its same() would only pass the question on to its equals().
+            if (v != w && !(container(v) ? v.same(w, spent + COMPARE) : v.equals(w))) {
                 return false;
             }
         }
         return true;
     }
 
-    /** What {@code Arrays.hashCode} gives for the values of a list or a map at a depth. */
-    static int hashValues(Value[] vals, int depth) {
+    /** What {@code Arrays.hashCode} gives for the values of a list or a map; {@code spent} is as in {@link #sameValues}. */
+    static int hashValues(Value[] vals, int spent) {
         int h = 1;
         for (Value v : vals) {
-            h = 31 * h + (container(v) ? v.hash(depth + 1) : v.hashCode());
+            h = 31 * h + (container(v) ? v.hash(spent + COMPARE) : v.hashCode());
         }
         return h;
     }

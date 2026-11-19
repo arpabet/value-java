@@ -16,10 +16,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Lists and maps are gone through without recursion (packing, past the first
- * levels; printing, comparing and hashing always). Here that way is held
- * against the plain recursive one, written out in the test, on values of every
- * shape and of depths around the one where packing changes its way.
+ * Lists and maps are gone through by recursion for the first levels of a
+ * value and without it past them, and where the one way ends is another for
+ * packing and printing, for comparing and hashing, and for writing JSON. Here
+ * both ways are held against plain recursion all the way, written out in the
+ * test, on values of every shape and of the depths around each of those ends.
  */
 class WalkTest {
 
@@ -230,7 +231,7 @@ class WalkTest {
         printRecursively(v, text);
         final int hash = hashRecursively(v);
         // With recursion all the way, for the first levels only, and not at all.
-        for (int deep : new int[] {Integer.MAX_VALUE, DEEP, 3, 2, 1, 0}) {
+        for (int deep : new int[] {Integer.MAX_VALUE, DEEP, 9, 5, 3, 2, 1, 0}) {
             Walk.deep = deep;
             final String how = what + ", with recursion to " + deep;
             assertEquals(want, v.hex(), how);
@@ -252,7 +253,7 @@ class WalkTest {
         Walk.deep = Integer.MAX_VALUE;
         final String canonical = v.toJson(JsonMode.CANONICAL, unlimited);
         final String relaxed = v.toJson(JsonMode.RELAXED, unlimited);
-        for (int deep : new int[] {DEEP, 2, 1, 0}) {
+        for (int deep : new int[] {DEEP, 9, 5, 2, 1, 0}) {
             Walk.deep = deep;
             assertEquals(canonical, v.toJson(JsonMode.CANONICAL, unlimited), what + ", with recursion to " + deep);
             assertEquals(relaxed, v.toJson(JsonMode.RELAXED, unlimited), what + ", with recursion to " + deep);
@@ -278,7 +279,7 @@ class WalkTest {
             check(v, v.toString());
             // And against another value: equal exactly when the recursive way says so.
             final Value other = random.nextInt(3) == 0 ? Value.unpack(v.pack()) : random(random, 1 + random.nextInt(4));
-            Walk.deep = new int[] {0, 1, 2, DEEP}[random.nextInt(4)];
+            Walk.deep = new int[] {0, 1, 2, 5, DEEP}[random.nextInt(5)];
             assertEquals(equalRecursively(v, other), v.equals(other), v + " and " + other);
             assertEquals(equalRecursively(other, v), other.equals(v), other + " and " + v);
             if (v.equals(other)) {
@@ -287,38 +288,54 @@ class WalkTest {
         }
     }
 
+    /** The depths at which a walk leaves recursion: of packing and printing, of comparing and hashing, of writing JSON. */
+    private static final int[] ENDS = {DEEP, DEEP / Walk.COMPARE, DEEP / Walk.JSON};
+
     @Test
-    void chainsOfTheDepthsAroundTheOneWherePackingChangesItsWay() {
-        for (int depth : new int[] {0, 1, 2, 3, DEEP - 2, DEEP - 1, DEEP, DEEP + 1, DEEP + 2, 2 * DEEP, 2 * DEEP + 1, 300}) {
+    void chainsOfTheDepthsAroundTheOnesWhereAWalkChangesItsWay() {
+        // No deeper than twice the allowance: the test itself goes down a chain by recursion.
+        for (int depth : new int[] {0, 1, 2, 3, 2 * DEEP, 2 * DEEP + 1}) {
             check(chain(depth, Value.ofLong(7)), "a chain of " + depth);
+        }
+        for (int end : ENDS) {
+            for (int depth = end - 2; depth <= end + 2; depth++) {
+                check(chain(depth, Value.ofLong(7)), "a chain of " + depth);
+            }
         }
     }
 
     @Test
     void aDifferenceAtAnyDepthIsADifference() {
-        for (int depth : new int[] {1, 2, 3, 5, DEEP, DEEP + 1, 200}) {
-            Walk.deep = new int[] {0, 1, DEEP, Integer.MAX_VALUE}[depth % 4];
-            final Value v = chain(depth, Value.ofLong(7));
-            final String what = "a chain of " + depth + ", with recursion to " + Walk.deep;
-            // Another leaf, of another value and of another kind.
-            assertNotEquals(v, chain(depth, Value.ofLong(8)), what);
-            assertNotEquals(v, chain(depth, Value.ofDouble(7)), what);
-            assertNotEquals(v, chain(depth, Value.list()), what);
-            assertNotEquals(chain(depth, Value.list()), chain(depth, Value.emptySparseList()), what);
-            assertNotEquals(chain(depth, Value.emptyMap()), chain(depth, Value.emptySparseList()), what);
-            assertNotEquals(chain(depth, Value.emptyMap()), chain(depth, Value.list()), what);
-            assertNotEquals(chain(depth, Value.list(Value.ofLong(1))), chain(depth, Value.list(Value.ofLong(1), Value.ofLong(1))), what);
-            assertNotEquals(chain(depth, Value.emptyMap().put("a", Value.ofLong(1))),
-                    chain(depth, Value.emptyMap().put("b", Value.ofLong(1))), what);
-            assertNotEquals(chain(depth, Value.emptySparseList().putAt(1, Value.ofLong(1))),
-                    chain(depth, Value.emptySparseList().putAt(2, Value.ofLong(1))), what);
-            // One level more or less.
-            assertNotEquals(v, chain(depth + 1, Value.ofLong(7)), what);
-            assertNotEquals(chain(depth + 1, Value.ofLong(7)), v, what);
-            // And the same again is the same, with the same hash.
-            assertEquals(v, chain(depth, Value.ofLong(7)), what);
-            assertEquals(v.hashCode(), chain(depth, Value.ofLong(7)).hashCode(), what);
+        final int half = DEEP / Walk.COMPARE;
+        for (int depth : new int[] {1, 2, 3, 5, half - 1, half, half + 1, DEEP, DEEP + 1, 2 * DEEP + 1}) {
+            for (int deep : new int[] {0, 1, 5, DEEP, Integer.MAX_VALUE}) {
+                aDifferenceIsADifference(depth, deep);
+            }
         }
+    }
+
+    private static void aDifferenceIsADifference(int depth, int deep) {
+        Walk.deep = deep;
+        final Value v = chain(depth, Value.ofLong(7));
+        final String what = "a chain of " + depth + ", with recursion to " + Walk.deep;
+        // Another leaf, of another value and of another kind.
+        assertNotEquals(v, chain(depth, Value.ofLong(8)), what);
+        assertNotEquals(v, chain(depth, Value.ofDouble(7)), what);
+        assertNotEquals(v, chain(depth, Value.list()), what);
+        assertNotEquals(chain(depth, Value.list()), chain(depth, Value.emptySparseList()), what);
+        assertNotEquals(chain(depth, Value.emptyMap()), chain(depth, Value.emptySparseList()), what);
+        assertNotEquals(chain(depth, Value.emptyMap()), chain(depth, Value.list()), what);
+        assertNotEquals(chain(depth, Value.list(Value.ofLong(1))), chain(depth, Value.list(Value.ofLong(1), Value.ofLong(1))), what);
+        assertNotEquals(chain(depth, Value.emptyMap().put("a", Value.ofLong(1))),
+                chain(depth, Value.emptyMap().put("b", Value.ofLong(1))), what);
+        assertNotEquals(chain(depth, Value.emptySparseList().putAt(1, Value.ofLong(1))),
+                chain(depth, Value.emptySparseList().putAt(2, Value.ofLong(1))), what);
+        // One level more or less.
+        assertNotEquals(v, chain(depth + 1, Value.ofLong(7)), what);
+        assertNotEquals(chain(depth + 1, Value.ofLong(7)), v, what);
+        // And the same again is the same, with the same hash.
+        assertEquals(v, chain(depth, Value.ofLong(7)), what);
+        assertEquals(v.hashCode(), chain(depth, Value.ofLong(7)).hashCode(), what);
     }
 
     @Test

@@ -30,10 +30,10 @@ compatible with it.
 - **Canonical MessagePack**: `Value.pack`, `Value.unpack`, `Value.read`,
   `Value.writeTo`, `Unpacker`, and the decoding `Limits` of the Go
   implementation. The decoder reads every MessagePack form.
-- **No dependence on the thread's stack**: decoding, packing, JSON in both
-  directions, printing, comparing and hashing do not recurse with the depth
-  of a value, so the thousand levels a decoder accepts by default work on a
-  stack of any size.
+- **A deeper value takes no more of the thread's stack**: decoding, packing,
+  JSON in both directions, printing, comparing and hashing do not recurse
+  with the depth of a value past its first levels, so the thousand levels a
+  decoder accepts by default take under 16 KB of stack, as a few dozen do.
 - **Lossless JSON**: `Value.toJson` in the canonical and relaxed modes and
   `Value.parseJson`; `toString` and `jsonify` render as Go's `String()` and
   `Jsonify` do.
