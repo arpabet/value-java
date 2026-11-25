@@ -200,9 +200,10 @@ final class Walk {
             if (i != 0) {
                 out.append(',');
             }
-            // A key is written as it is, without escapes, as Go writes it.
+            // A key is quoted as text is, as Go quotes it.
             if (l.keys != null) {
-                out.append('"').append(l.keys[i]).append("\": ");
+                GoQuote.quote(out, l.keys[i]);
+                out.append(": ");
             } else if (l.indexes != null) {
                 out.append('"').append(l.indexes[i]).append("\": ");
             }

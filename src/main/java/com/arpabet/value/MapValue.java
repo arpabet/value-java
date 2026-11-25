@@ -509,8 +509,9 @@ public final class MapValue extends Value implements Iterable<MapValue.Entry> {
             if (i != 0) {
                 out.append(',');
             }
-            // The key is written as it is, without escapes, as Go writes it.
-            out.append('"').append(m.keys[i]).append("\": ");
+            // The key is quoted as text is, as Go quotes it.
+            GoQuote.quote(out, m.keys[i]);
+            out.append(": ");
             m.vals[i].jsonify(out, depth + 1);
         }
         out.append('}');

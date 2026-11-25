@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/shopspring/decimal v1.4.0
-	go.arpabet.com/value v1.6.1
+	go.arpabet.com/value v1.6.2
 	golang.org/x/crypto v0.53.0
 )
 

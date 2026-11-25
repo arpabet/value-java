@@ -23,13 +23,13 @@ in the other, and an object signed on one side verifies on the other.
   threads; as in Go there are mutable lists and maps as well
   ([Mutable lists and maps](#mutable-lists-and-maps)).
 
-It implements version 1.6.1 of the format.
+It implements version 1.6.2 of the format.
 
 ## Install
 
 ```kotlin
 dependencies {
-    implementation("com.arpabet:value:0.1.0")
+    implementation("com.arpabet:value:0.2.0")
 }
 ```
 
@@ -347,6 +347,10 @@ and sign the MessagePack bytes.
 
 `toString()` and `jsonify()` are the Go implementation's human-readable
 `String()` and `Jsonify` (binary as `base64,…`, big numbers in hexadecimal).
+`jsonify()` is JSON for every value, which value-rpc's JSON wire codec relies
+on: a character that is not printable is escaped, a byte that is not UTF-8 is
+written as U+FFFD, and a double that is NaN or infinite is `null`. It does not
+tell every kind apart, as `toJson` does.
 
 ## Untrusted input
 

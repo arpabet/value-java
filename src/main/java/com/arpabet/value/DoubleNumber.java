@@ -89,8 +89,9 @@ final class DoubleNumber extends NumberValue {
 
     @Override
     void jsonify(StringBuilder out) {
+        // A double that is not a number, or not finite, has no JSON form.
         final double d = doubleValue();
-        out.append(d != d ? "null" : DoubleFormat.plain(d));
+        out.append(d != d || Double.isInfinite(d) ? "null" : DoubleFormat.plain(d));
     }
 
     @Override

@@ -616,10 +616,12 @@ public abstract sealed class Value
     public abstract String toString();
 
     /**
-     * The JSON-like rendering of the Go implementation's {@code Jsonify},
-     * which value-rpc's JSON wire codec speaks: {@code toString} with text
-     * quoted. It does not tell every kind apart; {@link #toJson(JsonMode)}
-     * does.
+     * The rendering of the Go implementation's {@code Jsonify}, which
+     * value-rpc's JSON wire codec speaks: {@code toString} with text quoted.
+     * It is JSON for every value: in text and in a map key a character that
+     * is not printable is escaped, a byte that is not UTF-8 is written as
+     * U+FFFD, and a double that is NaN or infinite is {@code null}. It does
+     * not tell every kind apart; {@link #toJson(JsonMode)} does.
      */
     public final String jsonify() {
         final StringBuilder out = new StringBuilder();

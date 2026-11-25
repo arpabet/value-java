@@ -237,7 +237,8 @@ class ValueTest {
         assertArrayEquals(new byte[] {(byte) 0xc3, 0x28}, s.raw());
         assertEquals(2, s.size());
         assertEquals(s, Value.utf8("\uDCC3("));
-        assertEquals("\"\\xc3(\"", s.jsonify());
+        // The byte has no JSON form: jsonify writes the escape of U+FFFD for it.
+        assertEquals("\"" + '\\' + "ufffd(\"", s.jsonify());
         assertThrows(ValueException.class, () -> s.toJson(JsonMode.CANONICAL));
         assertEquals("\uDCC3(", ((StringValue) Value.raw(new byte[] {(byte) 0xc3, 0x28})).utf8());
 

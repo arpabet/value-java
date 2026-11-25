@@ -8,6 +8,37 @@ All notable changes to this project are documented here. The format is based on
 
 Nothing yet.
 
+## v0.2.0 — 2026-11-24
+
+`jsonify()` writes JSON for every value, following
+[`go.arpabet.com/value`](https://github.com/arpabet/value) v1.6.2, whose
+`Jsonify` it mirrors.
+
+### Fixed
+
+- **`jsonify()` of text quoted it as a Go string literal**, as the Go
+  implementation did, which is JSON for most text and not for all of it: a
+  control character came out as `\a`, `\v` or `\x1b`, a byte that is not UTF-8
+  as `\xff`, and a character beyond the basic plane that is not printable with
+  Go's eight-digit escape. No JSON reader takes those, so a value-rpc frame in
+  the JSON wire codec that carried one was refused by the peer. A control
+  character is written with JSON's four-digit escape, a character beyond the
+  basic plane that is not printable as its surrogate pair, and a byte that is
+  not UTF-8, which has no JSON form, as U+FFFD. Text that was rendered as JSON
+  before is rendered as it was, character for character.
+- **A map key was written between quotes with no escape at all**, so a key with
+  a quote, a backslash or a control character in it gave text that is not
+  JSON. A key is quoted as text is.
+- **A double that is infinite** was written `+Inf` or `-Inf` by `jsonify()`. It
+  is `null`, as NaN already was. `toString()` is unchanged.
+
+### Compatibility
+
+- The canonical bytes, the lossless JSON (`toJson`, `parseJson`) and
+  `toString()` of anything but a list or a map are untouched. `toString()` of a
+  list or a map is its `jsonify()`, and changes with it.
+- The golden corpus is the one v1.6.2 of the Go implementation writes.
+
 ## v0.1.0 — 2026-11-19
 
 The first version: the Java implementation of

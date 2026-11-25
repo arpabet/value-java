@@ -6,9 +6,16 @@
 package com.arpabet.value;
 
 /**
- * Go's {@code strconv.Quote}, which the human-readable rendering of a value
- * ({@code toString}, {@code jsonify}) quotes text with: a double-quoted Go
- * string literal in which a character Go does not call printable is escaped.
+ * The quoting of the human-readable rendering of a value ({@code toString},
+ * {@code jsonify}), which is the Go implementation's since its v1.6.2: text
+ * and map keys as a JSON string in which a character Go does not call
+ * printable is escaped. It is Go's {@code strconv.Quote} wherever that gives
+ * JSON, and JSON where it does not: a control character that a Go string
+ * literal writes with an escape JSON lacks (the bell, the vertical tab, any
+ * other in hexadecimal) is written as a backslash, {@code u} and four
+ * hexadecimal digits, as a character that is not printable already was in
+ * the basic plane; one beyond the basic plane is written as its surrogate
+ * pair; and a byte that is not UTF-8, which has no JSON form, as U+FFFD.
  *
  * <p>Printable means a letter, mark, number, punctuation or symbol of Unicode,
  * or the ASCII space. The tables are those of the running Java, so a character
@@ -45,9 +52,8 @@ final class GoQuote {
                     r = Character.toCodePoint(c, s.charAt(++i));
                 } else {
                     if (c >= 0xDC80 && c <= 0xDCFF) {
-                        // A byte that is not UTF-8.
-                        b.append("\\x");
-                        Hex.append(b, c - 0xDC00);
+                        // A byte that is not UTF-8 has no JSON form: U+FFFD, escaped.
+                        escape(b, 0xFFFD);
                     } else {
                         // No byte form: it encodes as U+FFFD, which is printable.
                         b.append('\uFFFD');
@@ -60,9 +66,6 @@ final class GoQuote {
                 continue;
             }
             switch (r) {
-                case 0x07:
-                    b.append("\\a");
-                    break;
                 case '\b':
                     b.append("\\b");
                     break;
@@ -78,28 +81,24 @@ final class GoQuote {
                 case '\t':
                     b.append("\\t");
                     break;
-                case 0x0B:
-                    b.append("\\v");
-                    break;
                 default:
-                    if (r < 0x20 || r == 0x7F) {
-                        b.append("\\x");
-                        Hex.append(b, r);
-                    } else if (r < 0x10000) {
-                        b.append("\\u");
-                        Hex.append(b, r >>> 8);
-                        Hex.append(b, r);
+                    if (r < 0x10000) {
+                        escape(b, r);
                     } else {
-                        b.append("\\U");
-                        Hex.append(b, r >>> 24);
-                        Hex.append(b, r >>> 16);
-                        Hex.append(b, r >>> 8);
-                        Hex.append(b, r);
+                        escape(b, Character.highSurrogate(r));
+                        escape(b, Character.lowSurrogate(r));
                     }
                     break;
             }
         }
         b.append('"');
+    }
+
+    /** The escape of a UTF-16 code unit: a backslash, u and four hexadecimal digits. */
+    private static void escape(StringBuilder b, int unit) {
+        b.append('\\').append('u');
+        Hex.append(b, unit >>> 8);
+        Hex.append(b, unit);
     }
 
     /** Go's strconv.IsPrint. */
