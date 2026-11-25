@@ -8,7 +8,7 @@ plugins {
 group = "com.arpabet"
 // Between releases, the next version with -SNAPSHOT. A release takes the
 // suffix off and is tagged `v` + the version (.github/workflows/release.yaml).
-version = "0.3.0"
+version = "0.4.0-SNAPSHOT"
 description = "Deterministic, canonical MessagePack serialization: the Java implementation of go.arpabet.com/value"
 
 repositories {
